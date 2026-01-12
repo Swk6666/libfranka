@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
       double s = quintic_polynomial(tau);
       
       // 对每个关节进行插值: q(t) = q_start + s * (q_end - q_start)
-      franka::JointPositions output;
+      franka::JointPositions output(q_start_actual);
       for (size_t i = 0; i < 7; i++) {
         output.q[i] = q_start_actual[i] + s * (q_end[i] - q_start_actual[i]);
       }
