@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
     
     // 起始和目标关节位置
     std::array<double, 7> q_start = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
-    std::array<double, 7> q_end = {{0, -M_PI_4*0.5, 0, -2 * M_PI_4, 0, 0, M_PI_4}};
+    std::array<double, 7> q_end = {{0.0, 0.0, 0.0, -1.57, 0.0, 1.57, -0.785}};
     
     // 运动时间（秒）- 从命令行读取或使用默认值
     double motion_time = 10.0;  // 默认10秒
