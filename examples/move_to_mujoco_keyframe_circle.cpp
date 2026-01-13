@@ -1,0 +1,195 @@
+// Copyright (c) 2017 Franka Emika GmbH
+// Use of this source code is governed by the Apache-2.0 license, see LICENSE
+#include <cmath>
+#include <exception>
+#include <iomanip>
+#include <iostream>
+#include <string>
+
+#include <franka/exception.h>
+#include <franka/robot.h>
+#include <franka/circle_trajectory.h>
+
+#include "examples_common.h"
+
+/**
+ * @example move_to_mujoco_keyframe_circle.cpp
+ * Move the robot end-effector along a circular trajectory in the XY plane.
+ * Uses franka::generateCircleTrajectory to generate the trajectory.
+ * 
+ * The motion consists of two phases:
+ * 1. Linear segment: Move from circle center to edge along +X
+ * 2. Circular segment: Complete a full circle in the XY plane
+ *
+ * @warning Before executing this example, make sure there is enough space around the robot.
+ */
+
+int main(int argc, char** argv) {
+  // Check arguments
+  if (argc > 4) {
+    std::cerr << "Usage: " << argv[0] << " [radius] [line-time] [circle-time]" << std::endl
+              << "  radius: circle radius in meters (default: 0.05)" << std::endl
+              << "  line-time: duration of linear segment in seconds (default: 2.0)" << std::endl
+              << "  circle-time: duration of circular segment in seconds (default: 4.0)" << std::endl;
+    return -1;
+  }
+
+  try {
+    // Fixed robot IP address
+    const std::string robot_ip = "172.16.1.2";
+    
+    // Initial joint configuration (same as generate_cartesian_pose_motion.cpp)
+    std::array<double, 7> q_start = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
+    
+    // Circle trajectory parameters
+    double radius = 0.1;      // Default 5cm radius
+    double line_time = 4.0;    // Default 2 seconds for linear segment
+    double circle_time = 10.0;  // Default 4 seconds for circular segment
+    
+    // Parse optional arguments
+    if (argc >= 2) {
+      try {
+        radius = std::stod(argv[1]);
+        if (!std::isfinite(radius) || radius <= 0.0 || radius > 0.3) {
+          std::cerr << "Error: radius should be between 0 and 0.3 meters" << std::endl;
+          return -1;
+        }
+      } catch (const std::exception&) {
+        std::cerr << "Error: invalid radius value" << std::endl;
+        return -1;
+      }
+    }
+    
+    if (argc >= 3) {
+      try {
+        line_time = std::stod(argv[2]);
+        if (!std::isfinite(line_time) || line_time <= 0.0 || line_time > 30.0) {
+          std::cerr << "Error: line-time should be between 0 and 30 seconds" << std::endl;
+          return -1;
+        }
+      } catch (const std::exception&) {
+        std::cerr << "Error: invalid line-time value" << std::endl;
+        return -1;
+      }
+    }
+    
+    if (argc >= 4) {
+      try {
+        circle_time = std::stod(argv[3]);
+        if (!std::isfinite(circle_time) || circle_time <= 0.0 || circle_time > 60.0) {
+          std::cerr << "Error: circle-time should be between 0 and 60 seconds" << std::endl;
+          return -1;
+        }
+      } catch (const std::exception&) {
+        std::cerr << "Error: invalid circle-time value" << std::endl;
+        return -1;
+      }
+    }
+
+    std::cout << "=== Circle Trajectory Parameters ===" << std::endl;
+    std::cout << "Radius: " << radius << " m" << std::endl;
+    std::cout << "Linear segment time: " << line_time << " s" << std::endl;
+    std::cout << "Circular segment time: " << circle_time << " s" << std::endl;
+    std::cout << "Total motion time: " << (line_time + circle_time) << " s" << std::endl;
+
+    // Generate circle trajectory (relative to origin, will be applied as offset)
+    // Time step matches robot control frequency (1kHz)
+    constexpr double kTimeStep = 0.001;
+    franka::CircleTrajectory circle_trajectory = 
+        franka::generateCircleTrajectory(radius, line_time, circle_time, kTimeStep);
+    
+    std::cout << "Generated " << circle_trajectory.points.size() << " trajectory points" << std::endl;
+
+    std::cout << "\nConnecting to robot at " << robot_ip << "..." << std::endl;
+    franka::Robot robot(robot_ip);
+    setDefaultBehavior(robot);
+
+    // Set collision behavior
+    robot.setCollisionBehavior(
+        {{20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0}}, {{20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0}},
+        {{20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0}}, {{20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0}},
+        {{20.0, 20.0, 20.0, 25.0, 25.0, 25.0}}, {{20.0, 20.0, 20.0, 25.0, 25.0, 25.0}},
+        {{20.0, 20.0, 20.0, 25.0, 25.0, 25.0}}, {{20.0, 20.0, 20.0, 25.0, 25.0, 25.0}});
+
+    // First move the robot to the initial joint configuration
+    std::cout << "\nMoving to initial joint configuration..." << std::endl;
+    MotionGenerator motion_generator(0.5, q_start);
+    robot.control(motion_generator);
+    std::cout << "Reached initial configuration." << std::endl;
+
+    std::cout << "\nWARNING: This example will move the robot end-effector in a circle! "
+              << "Please make sure to have the user stop button at hand!" << std::endl
+              << "Press Enter to continue..." << std::endl;
+    std::cin.ignore();
+
+    // Variables for control loop
+    std::array<double, 16> initial_pose;
+    size_t trajectory_index = 0;
+    bool initialized = false;
+
+    std::cout << "Starting circle trajectory motion..." << std::endl;
+    std::cout << "Phase 1: Linear segment (center -> edge)" << std::endl;
+
+    // Execute Cartesian pose control following the circle trajectory
+    robot.control([&circle_trajectory, &initial_pose, &trajectory_index, &initialized, line_time](
+                      const franka::RobotState& robot_state,
+                      franka::Duration /*period*/) -> franka::CartesianPose {
+      
+      // Initialize: record the initial end-effector pose
+      if (!initialized) {
+        initialized = true;
+        initial_pose = robot_state.O_T_EE_c;
+        std::cout << "Initial EE position: [" 
+                  << initial_pose[12] << ", " 
+                  << initial_pose[13] << ", " 
+                  << initial_pose[14] << "]" << std::endl;
+      }
+
+      // Check if trajectory is complete
+      if (trajectory_index >= circle_trajectory.points.size()) {
+        std::cout << std::endl << "Circle trajectory completed!" << std::endl;
+        return franka::MotionFinished(franka::CartesianPose(initial_pose));
+      }
+
+      // Get current trajectory point
+      const auto& point = circle_trajectory.points[trajectory_index];
+      
+      // Print phase transition
+      static bool phase2_printed = false;
+      if (!phase2_printed && point.time > line_time) {
+        std::cout << std::endl << "Phase 2: Circular segment" << std::endl;
+        phase2_printed = true;
+      }
+
+      // Apply trajectory offset to initial pose
+      // The circle trajectory is in the XY plane (robot base frame)
+      std::array<double, 16> new_pose = initial_pose;
+      new_pose[12] += point.position[0];  // X offset
+      new_pose[13] += point.position[1];  // Y offset
+      new_pose[14] += point.position[2];  // Z offset (should be 0 for XY plane circle)
+
+      // Advance to next trajectory point
+      trajectory_index++;
+
+      // Print progress every 500 points (0.5 seconds)
+      if (trajectory_index % 500 == 0) {
+        double progress = 100.0 * trajectory_index / circle_trajectory.points.size();
+        std::cout << "\rProgress: " << std::fixed << std::setprecision(1) << progress << "% "
+                  << "Time: " << point.time << "s "
+                  << "Pos: [" << std::setprecision(4) 
+                  << new_pose[12] << ", " << new_pose[13] << ", " << new_pose[14] << "]"
+                  << std::flush;
+      }
+
+      return new_pose;
+    });
+
+    std::cout << "\nCircle trajectory motion completed successfully!" << std::endl;
+    
+  } catch (const franka::Exception& e) {
+    std::cout << e.what() << std::endl;
+    return -1;
+  }
+
+  return 0;
+}

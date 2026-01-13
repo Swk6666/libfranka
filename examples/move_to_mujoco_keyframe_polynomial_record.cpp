@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     
     // 起始和目标关节位置
     std::array<double, 7> q_start = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
-    std::array<double, 7> q_end = {{0.0, 0.0, 0.0, -1.57, 0.0, 1.57, -0.785}};
+    std::array<double, 7> q_end = {{0.0, 0.0, 0.0, -M_PI_2, 0.0, M_PI_2, -M_PI_4}};
     
     // 运动时间（秒）- 从命令行读取或使用默认值
     double motion_time = 10.0;  // 默认10秒
@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
     std::string source_path = __FILE__;  // 例如: /home/swk/libfranka/examples/xxx.cpp
     std::string source_dir = source_path.substr(0, source_path.find_last_of("/\\"));  // examples 目录
     std::string parent_dir = source_dir.substr(0, source_dir.find_last_of("/\\"));    // libfranka 目录
-    std::string data_dir = parent_dir + "/data";
+    std::string data_dir = parent_dir + "/data/move_to_mujoco_keyframe_polynomial_record";
     std::string csv_filename = data_dir + "/trajectory_data.csv";
     
     // 尝试创建 data 目录（如果不存在）

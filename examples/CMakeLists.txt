@@ -22,6 +22,9 @@ add_library(examples_common STATIC
 
 target_link_libraries(examples_common PUBLIC Franka::Franka Eigen3::Eigen3)
 
+# 添加本地 include 路径，以便使用尚未安装的新头文件
+target_include_directories(examples_common PUBLIC ${CMAKE_CURRENT_LIST_DIR}/../include)
+
 set(EXAMPLES
   cartesian_impedance_control
   communication_test
@@ -29,6 +32,7 @@ set(EXAMPLES
   force_control
   generate_cartesian_pose_motion
   generate_cartesian_velocity_motion
+  generate_circle_trajectory
   generate_consecutive_motions
   generate_elbow_motion
   generate_joint_position_motion

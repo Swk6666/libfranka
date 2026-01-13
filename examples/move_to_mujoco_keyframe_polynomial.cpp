@@ -6,6 +6,7 @@
 #include <string>
 
 #include <franka/exception.h>
+#include <franka/quintic_polynomial.h>
 #include <franka/robot.h>
 
 #include "examples_common.h"
@@ -33,11 +34,12 @@ int main(int argc, char** argv) {
     
     // 起始和目标关节位置
     std::array<double, 7> q_start = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
-    std::array<double, 7> q_end = {{0.0, 0.0, 0.0, -1.57, 0.0, 1.57, -0.785}};
+    std::array<double, 7> q_end = {{0.0, 0.0, 0.0, -M_PI_2, 0.0, M_PI_2, -M_PI_4}};
     
     // 运动时间（秒）- 从命令行读取或使用默认值
     double motion_time = 10.0;  // 默认10秒
-    if (argc == 2) {
+    if (argc == 2) 
+    {
       const std::string motion_time_arg(argv[1]);
       try {
         size_t parsed = 0;
@@ -55,7 +57,9 @@ int main(int argc, char** argv) {
         return -1;
       }
       std::cout << "Using custom motion time: " << motion_time << " seconds" << std::endl;
-    } else {
+    } 
+    else 
+    {
       std::cout << "Using default motion time: " << motion_time << " seconds" << std::endl;
     }
 
@@ -94,69 +98,47 @@ int main(int argc, char** argv) {
     robot.control(motion_to_start);
     std::cout << "Reached start position." << std::endl;
 
-    // 五次多项式轨迹规划
+    // 创建五次多项式轨迹生成器
+    // Create quintic polynomial trajectory generator
     // 边界条件：位置(q_start->q_end)，速度(0->0)，加速度(0->0)
     // 归一化的五次多项式: s(τ) = 10τ³ - 15τ⁴ + 6τ⁵, τ∈[0,1]
-    auto quintic_polynomial = [](double tau) -> double {
-      if (tau < 0.0) {
-        tau = 0.0;
-      } else if (tau > 1.0) {
-        tau = 1.0;
-      }
-      double tau2 = tau * tau;
-      double tau3 = tau2 * tau;
-      double tau4 = tau2 * tau2;
-      double tau5 = tau4 * tau;
-      return 10.0 * tau3 - 15.0 * tau4 + 6.0 * tau5;
-    };
+    franka::QuinticPolynomial trajectory(motion_time);
     
     std::cout << "\n=== Quintic Polynomial Trajectory ===" << std::endl;
     std::cout << "Motion time: " << motion_time << " seconds" << std::endl;
-    std::cout << "Initial velocity: 0 rad/s (all joints)" << std::endl;
-    std::cout << "Final velocity: 0 rad/s (all joints)" << std::endl;
-    std::cout << "Initial acceleration: 0 rad/s² (all joints)" << std::endl;
-    std::cout << "Final acceleration: 0 rad/s² (all joints)" << std::endl;
     
     std::cout << "\nWARNING: This example will move the robot! "
               << "Please make sure to have the user stop button at hand!" << std::endl
               << "Press Enter to continue..." << std::endl;
     std::cin.ignore();
     
-    // 存储初始化标志和时间
+    // 存储初始化标志
     bool initialized = false;
-    double time = 0.0;
     std::array<double, 7> q_start_actual = q_start;
 
     std::cout << "Starting quintic polynomial motion from q_start to q_end..." << std::endl;
     
     // 执行五次多项式轨迹运动
-    robot.control([&time, &initialized, &q_start_actual, q_end, motion_time, quintic_polynomial](
+    // 使用 QuinticPolynomial 类自动处理向量插值
+    robot.control([&trajectory, &initialized, &q_start_actual, q_end](
                       const franka::RobotState& robot_state,
-                      franka::Duration period) -> franka::JointPositions {
+                      franka::Duration period) -> franka::JointPositions 
+                      {
       
-      // 初始化
+      // 初始化：记录实际起始位置
       if (!initialized) {
         initialized = true;
         q_start_actual = robot_state.q_d;
       }
       
-      // 累加时间
-      time += period.toSec();
+      // 使用 QuinticPolynomial 类进行向量插值
+      // The interpolate method automatically handles std::array<double, 7>
+      std::array<double, 7> q_current = trajectory.interpolate(q_start_actual, q_end, period.toSec());
       
-      // 计算归一化时间 τ = t/T
-      double tau = time / motion_time;
-      
-      // 使用五次多项式计算插值系数
-      double s = quintic_polynomial(tau);
-      
-      // 对每个关节进行插值: q(t) = q_start + s * (q_end - q_start)
-      franka::JointPositions output(q_start_actual);
-      for (size_t i = 0; i < 7; i++) {
-        output.q[i] = q_start_actual[i] + s * (q_end[i] - q_start_actual[i]);
-      }
+      franka::JointPositions output(q_current);
       
       // 运动结束条件
-      if (time >= motion_time) {
+      if (trajectory.isFinished()) {
         return franka::MotionFinished(output);
       }
       
