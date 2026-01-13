@@ -40,6 +40,7 @@ set(EXAMPLES
   move_ee_cartesian
   move_to_mujoco_keyframe_p2p
   move_to_mujoco_keyframe_polynomial
+  move_to_mujoco_keyframe_polynomial_record
   print_joint_poses
   print_qpos_now
   vacuum_object
