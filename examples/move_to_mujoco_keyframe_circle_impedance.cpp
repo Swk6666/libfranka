@@ -1,21 +1,26 @@
 // Copyright (c) 2017 Franka Emika GmbH
 // Use of this source code is governed by the Apache-2.0 license, see LICENSE
+#include <array>
 #include <cmath>
 #include <exception>
 #include <iomanip>
 #include <iostream>
 #include <string>
 
+#include <franka/duration.h>
 #include <franka/exception.h>
+#include <franka/model.h>
+#include <franka/rate_limiting.h>
 #include <franka/robot.h>
 #include <franka/circle_trajectory.h>
 
 #include "examples_common.h"
 
 /**
- * @example move_to_mujoco_keyframe_circle.cpp
+ * @example move_to_mujoco_keyframe_circle_impedance.cpp
  * Move the robot end-effector along a circular trajectory in the XY plane.
  * Uses franka::generateCircleTrajectory to generate the trajectory.
+ * Tracks the Cartesian trajectory using joint impedance control with gravity compensation.
  * 
  * The motion consists of two phases:
  * 1. Linear segment: Move from circle center to edge along +X
@@ -137,8 +142,16 @@ int main(int argc, char** argv) {
               << "Press Enter to continue..." << std::endl;
     std::cin.ignore();
 
+    // Load the kinematics and dynamics model for gravity compensation.
+    franka::Model model = robot.loadModel();
+
+    // Set gains for the joint impedance control.
+    const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 250.0, 150.0, 50.0}};
+    const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0}};
+  
     // Variables for control loop
     std::array<double, 16> initial_pose;
+    std::array<double, 16> last_pose;
 
     // size_t 在c++中是无符号整型，专门用来表示大小，数量，索引
     size_t trajectory_index = 0;
@@ -148,47 +161,75 @@ int main(int argc, char** argv) {
     std::cout << "Starting circle trajectory motion..." << std::endl;
     std::cout << "Phase 1: Linear segment (center -> edge)" << std::endl;
 
-    // Execute Cartesian pose control following the circle trajectory
-    robot.control([&circle_trajectory, &initial_pose, &trajectory_index, &initialized, line_time](
-                      const franka::RobotState& robot_state,
-                      franka::Duration /*period*/) -> franka::CartesianPose {
-      
-      // Initialize: record the initial end-effector pose
-      if (!initialized) {
-        initialized = true;
-        initial_pose = robot_state.O_T_EE_c;
-        std::cout << "Initial EE position: [" 
-                  << initial_pose[12] << ", " 
-                  << initial_pose[13] << ", " 
-                  << initial_pose[14] << "]" << std::endl;
+    auto cartesian_pose_callback =
+        [&circle_trajectory, &initial_pose, &last_pose, &trajectory_index, &initialized](
+            const franka::RobotState& robot_state,
+            franka::Duration /*period*/) -> franka::CartesianPose 
+        {
+          // Initialize: record the initial end-effector pose
+          if (!initialized) {
+            initialized = true;
+            initial_pose = robot_state.O_T_EE_c;
+            last_pose = initial_pose;
+            std::cout << "Initial EE position: [" << initial_pose[12] << ", "
+                      << initial_pose[13] << ", " << initial_pose[14] << "]" << std::endl;
+          }
+
+          // Check if trajectory is complete
+          if (trajectory_index >= circle_trajectory.points.size()) {
+            std::cout << std::endl << "Circle trajectory completed!" << std::endl;
+            return franka::MotionFinished(franka::CartesianPose(last_pose));
+          }
+
+          // Get current trajectory point
+          const auto& point = circle_trajectory.points[trajectory_index];
+
+          // Apply trajectory offset to initial pose
+          // The circle trajectory is in the XY plane (robot base frame)
+          std::array<double, 16> new_pose = initial_pose;
+          new_pose[12] += point.position[0];  // X offset
+          new_pose[13] += point.position[1];  // Y offset
+          new_pose[14] += point.position[2];  // Z offset (should be 0 for XY plane circle)
+
+          last_pose = new_pose;
+          trajectory_index++;
+
+          return new_pose;
+        };
+
+    auto impedance_control_callback = [&model, k_gains, d_gains](
+                                          const franka::RobotState& state,
+                                          franka::Duration /*period*/) -> franka::Torques 
+    {
+      // Read current coriolis and gravity terms from model.
+      std::array<double, 7> coriolis = model.coriolis(state);
+      std::array<double, 7> gravity = model.gravity(state);
+
+      // Compute torque command from joint impedance control law with gravity compensation.
+      // Note: The answer to our Cartesian pose inverse kinematics is always in state.q_d with one
+      // time step delay.
+      std::array<double, 7> tau_d_calculated;
+      for (size_t i = 0; i < 7; i++) {
+        tau_d_calculated[i] = k_gains[i] * (state.q_d[i] - state.q[i]) -
+                              d_gains[i] * state.dq[i] + coriolis[i] + gravity[i];
       }
 
-      // Check if trajectory is complete
-      if (trajectory_index >= circle_trajectory.points.size()) {
-        std::cout << std::endl << "Circle trajectory completed!" << std::endl;
-        return franka::MotionFinished(franka::CartesianPose(initial_pose));
-      }
+      std::array<double, 7> tau_d_rate_limited =
+          franka::limitRate(franka::kMaxTorqueRate, tau_d_calculated, state.tau_J_d);
 
-      // Get current trajectory point
-      const auto& point = circle_trajectory.points[trajectory_index];
-      
+      return tau_d_rate_limited;
+    };
 
-      // Apply trajectory offset to initial pose
-      // The circle trajectory is in the XY plane (robot base frame)
-      std::array<double, 16> new_pose = initial_pose;
-      new_pose[12] += point.position[0];  // X offset
-      new_pose[13] += point.position[1];  // Y offset
-      new_pose[14] += point.position[2];  // Z offset (should be 0 for XY plane circle)
-
-      // Advance to next trajectory point
-      trajectory_index++;
-
-      return new_pose;
-    });
+    // Execute joint impedance control following the circle trajectory via internal IK.
+    // 等价于我想用力矩控制来驱动机器人，但目标是笛卡尔位姿轨迹描述的。
+    // （libfranka）帮着把笛卡尔目标做内部 IK 变成关节目标，然后我用关节阻抗算力矩。”
+    robot.control(impedance_control_callback, cartesian_pose_callback);
 
     std::cout << "\nCircle trajectory motion completed successfully!" << std::endl;
     
-  } catch (const franka::Exception& e) {
+  } 
+  catch (const franka::Exception& e) 
+  {
     std::cout << e.what() << std::endl;
     return -1;
   }
