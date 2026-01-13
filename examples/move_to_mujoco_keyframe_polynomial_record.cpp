@@ -200,8 +200,20 @@ int main(int argc, char** argv) {
     std::cout << "Quintic polynomial motion completed successfully!" << std::endl;
     std::cout << "Recorded " << recorded_data.size() << " data points." << std::endl;
     
-    // 保存数据到CSV文件
-    std::string csv_filename = "trajectory_data.csv";
+    // 保存数据到CSV文件 - 保存到源文件上级目录的 data 文件夹下
+    // __FILE__ 是当前源文件的路径，从中提取目录
+    std::string source_path = __FILE__;  // 例如: /home/swk/libfranka/examples/xxx.cpp
+    std::string source_dir = source_path.substr(0, source_path.find_last_of("/\\"));  // examples 目录
+    std::string parent_dir = source_dir.substr(0, source_dir.find_last_of("/\\"));    // libfranka 目录
+    std::string data_dir = parent_dir + "/data";
+    std::string csv_filename = data_dir + "/trajectory_data.csv";
+    
+    // 尝试创建 data 目录（如果不存在）
+    std::string mkdir_cmd = "mkdir -p " + data_dir;
+    system(mkdir_cmd.c_str());
+    
+    std::cout << "Saving data to: " << csv_filename << std::endl;
+    
     std::ofstream csv_file(csv_filename);
     if (!csv_file.is_open()) {
       std::cerr << "Error: Could not open file " << csv_filename << " for writing." << std::endl;

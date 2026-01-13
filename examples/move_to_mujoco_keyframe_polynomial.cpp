@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
       // 初始化
       if (!initialized) {
         initialized = true;
-        q_start_actual = robot_state.q;
+        q_start_actual = robot_state.q_d;
       }
       
       // 累加时间
