@@ -52,31 +52,50 @@ def main():
         tau_feedforward = tau_inertia + tau_coriolis + tau_gravity  # M*ddq + C + g
         
         # Plot in order of importance (back to front)
+        '''
         ax.plot(time, tau_feedforward, color=colors['feedforward'], linewidth=1.2, 
                 label='Feedforward (M*ddq+C+g)', alpha=0.7, linestyle='--')
         ax.plot(time, tau_inertia_coriolis, color=colors['inertia_coriolis'], linewidth=1.2, 
                 label='Inertia+Coriolis (M*ddq+C)', alpha=0.7, linestyle=':')
         ax.plot(time, tau_gravity, color=colors['gravity'], linewidth=1.2, 
                 label='Gravity', alpha=0.7, linestyle=':')
+        '''
+        '''
         ax.plot(time, tau_impedance, color=colors['impedance'], linewidth=1.3, 
                 label='Impedance', alpha=0.8)
+        '''
+        
         ax.plot(time, tau_measured, color=colors['measured'], linewidth=1.5, 
                 label='Measured', alpha=0.9)
+        
+
+        '''
         ax.plot(time, tau_cmd, color=colors['commanded'], linewidth=1.5, 
                 label='Commanded', alpha=0.9)
-        
+        '''
         ax.set_ylabel(f'Joint {i+1} (Nm)', fontsize=9)
         ax.grid(True, alpha=0.3)
-        
-        if i == 0:
-            ax.legend(loc='best', fontsize=7, ncol=2)
         
         # Add x-label to bottom row
         if i >= 4:  # Bottom row (indices 4, 5, 6, 7)
             ax.set_xlabel('Time (s)', fontsize=10)
     
-    # Hide the last subplot (index 7) as we only have 7 joints
-    axes_flat[7].axis('off')
+    # Use the 8th subplot for legend
+    ax_legend = axes_flat[7]
+    ax_legend.axis('off')
+    
+    # Create dummy lines for legend
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color=colors['commanded'], linewidth=1, label='Commanded'),
+        Line2D([0], [0], color=colors['measured'], linewidth=1, label='Measured'),
+        Line2D([0], [0], color=colors['feedforward'], linewidth=2, linestyle='--', label='Feedforward (M*ddq+C+g)'),
+        Line2D([0], [0], color=colors['impedance'], linewidth=2, label='Impedance'),
+        Line2D([0], [0], color=colors['inertia_coriolis'], linewidth=2, linestyle=':', label='Inertia+Coriolis (M*ddq+C)'),
+        Line2D([0], [0], color=colors['gravity'], linewidth=2, linestyle=':', label='Gravity'),
+    ]
+    ax_legend.legend(handles=legend_elements, loc='center', fontsize=11, frameon=True, 
+                     fancybox=True, shadow=True, ncol=1)
     
     plt.tight_layout()
     

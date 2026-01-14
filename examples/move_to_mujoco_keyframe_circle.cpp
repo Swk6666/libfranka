@@ -157,10 +157,6 @@ int main(int argc, char** argv) {
       if (!initialized) {
         initialized = true;
         initial_pose = robot_state.O_T_EE_c;
-        std::cout << "Initial EE position: [" 
-                  << initial_pose[12] << ", " 
-                  << initial_pose[13] << ", " 
-                  << initial_pose[14] << "]" << std::endl;
       }
 
       // Check if trajectory is complete

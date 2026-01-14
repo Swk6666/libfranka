@@ -156,24 +156,28 @@ int main(int argc, char** argv) {
     size_t trajectory_index = 0;
 
     bool initialized = false;
+    double time = 0.0;
 
 
     auto cartesian_pose_callback =
-        [&circle_trajectory, &initial_pose, &last_pose, &trajectory_index, &initialized](
+        [&circle_trajectory, &initial_pose, &last_pose, &trajectory_index, &initialized, &time](
             const franka::RobotState& robot_state,
-            franka::Duration /*period*/) -> franka::CartesianPose 
+            franka::Duration period) -> franka::CartesianPose 
         {
           // Initialize: record the initial end-effector pose
           if (!initialized) {
             initialized = true;
             initial_pose = robot_state.O_T_EE_c; //改成d试试？
             last_pose = initial_pose;
+            time = 0.0;
           }
 
-          // Check if trajectory is complete
-          if (trajectory_index >= circle_trajectory.points.size()) {
+          time += period.toSec();
 
-            return franka::MotionFinished(franka::CartesianPose(last_pose));
+          // Advance trajectory index based on elapsed time to avoid large jumps on missed cycles.
+          while (trajectory_index + 1 < circle_trajectory.points.size() &&
+                 circle_trajectory.points[trajectory_index + 1].time <= time) {
+            trajectory_index++;
           }
 
           // Get current trajectory point
@@ -187,7 +191,9 @@ int main(int argc, char** argv) {
           new_pose[14] += point.position[2];  // Z offset (should be 0 for XY plane circle)
 
           last_pose = new_pose;
-          trajectory_index++;
+          if (time >= circle_trajectory.points.back().time) {
+            return franka::MotionFinished(franka::CartesianPose(last_pose));
+          }
 
           return new_pose;
         };
