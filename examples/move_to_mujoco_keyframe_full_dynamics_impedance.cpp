@@ -143,6 +143,9 @@ int main(int argc, char** argv) {
     std::cout << "Starting quintic polynomial motion with full dynamics impedance..." << std::endl;
     std::cout << "Recording data during motion..." << std::endl;
 
+    // 【新增】在循环外定义一个变量，用于记录上一帧发送的指令
+    std::array<double, 7> last_tau_cmd{}; 
+
     robot.control([&](const franka::RobotState& state,
       franka::Duration period) -> franka::Torques {
       double dt = period.toSec();
@@ -190,14 +193,17 @@ int main(int argc, char** argv) {
       std::array<double, 7> tau_d_rate_limited;
       
       if (sample_index == 0) {
-          // 第一帧：使用当前测量到的力矩 (state.tau_J) 作为参考基准。
-          // 这样 franka::limitRate 会计算从“实际测量值”到“目标计算值(tau_cmd)”的合法变化量。
-          // 这既避免了从0开始的掉臂，也避免了如果模型与实际有偏差时产生的力矩突变。
+          // 第一帧：没有“上一帧指令”，所以参考“当前测量力矩 state.tau_J”
+          // 这让指令从“当前实际受力”平滑过渡到“目标力矩”
           tau_d_rate_limited = franka::limitRate(franka::kMaxTorqueRate, tau_cmd, state.tau_J);
       } else {
-          // 后续帧：使用上一帧的指令力矩 (state.tau_J_d) 作为参考基准。
-          tau_d_rate_limited = franka::limitRate(franka::kMaxTorqueRate, tau_cmd, state.tau_J);
+          // 【重点修改】后续帧：参考“我上一帧自己发送的指令 (last_tau_cmd)”
+          // 而不要使用 state.tau_J_d，因为 state 有延迟，可能还没更新。
+          tau_d_rate_limited = franka::limitRate(franka::kMaxTorqueRate, tau_cmd, last_tau_cmd);
       }
+      
+      // 【新增】更新历史记录，供下一帧使用
+      last_tau_cmd = tau_d_rate_limited;
       
       franka::Torques command(tau_d_rate_limited);
 
