@@ -158,8 +158,6 @@ int main(int argc, char** argv) {
 
     bool initialized = false;
 
-    std::cout << "Starting circle trajectory motion..." << std::endl;
-    std::cout << "Phase 1: Linear segment (center -> edge)" << std::endl;
 
     auto cartesian_pose_callback =
         [&circle_trajectory, &initial_pose, &last_pose, &trajectory_index, &initialized](
