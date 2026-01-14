@@ -171,13 +171,11 @@ int main(int argc, char** argv) {
             initialized = true;
             initial_pose = robot_state.O_T_EE_c;
             last_pose = initial_pose;
-            std::cout << "Initial EE position: [" << initial_pose[12] << ", "
-                      << initial_pose[13] << ", " << initial_pose[14] << "]" << std::endl;
           }
 
           // Check if trajectory is complete
           if (trajectory_index >= circle_trajectory.points.size()) {
-            std::cout << std::endl << "Circle trajectory completed!" << std::endl;
+
             return franka::MotionFinished(franka::CartesianPose(last_pose));
           }
 
