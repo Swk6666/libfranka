@@ -66,8 +66,8 @@ set(EXAMPLES
   move_to_mujoco_keyframe_polynomial
   move_to_mujoco_keyframe_polynomial_record
   move_to_mujoco_keyframe_circle
+  move_to_mujoco_keyframe_circle_trajectory
   move_to_mujoco_keyframe_circle_impedance
-  move_to_mujoco_keyframe_circle_impedance_record
   move_to_mujoco_keyframe_full_dynamics_impedance
   print_joint_poses
   print_qpos_now

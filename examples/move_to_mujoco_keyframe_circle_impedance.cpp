@@ -10,7 +10,6 @@
 #include <franka/duration.h>
 #include <franka/exception.h>
 #include <franka/model.h>
-#include <franka/rate_limiting.h>
 #include <franka/robot.h>
 #include <franka/circle_trajectory.h>
 
@@ -59,12 +58,12 @@ int main(int argc, char** argv) {
     const std::string robot_ip = "172.16.1.2";
     
     // Initial joint configuration (same as generate_cartesian_pose_motion.cpp)
-    std::array<double, 7> q_start = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
+    std::array<double, 7> q_start = {{0.0, 0.0, 0.0, -1.57, 0.0, 1.57, -0.785}};
     
     // Circle trajectory parameters
     double radius = 0.1;      // Default 5cm radius
-    double line_time = 4.0;    // Default 2 seconds for linear segment
-    double circle_time = 10.0;  // Default 4 seconds for circular segment
+    double line_time = 10.0;    // Default 2 seconds for linear segment
+    double circle_time = 20.0;  // Default 4 seconds for circular segment
     
     // Parse optional arguments
     if (argc >= 2) {
@@ -167,7 +166,7 @@ int main(int argc, char** argv) {
           // Initialize: record the initial end-effector pose
           if (!initialized) {
             initialized = true;
-            initial_pose = robot_state.O_T_EE_c;
+            initial_pose = robot_state.O_T_EE_c; //改成d试试？
             last_pose = initial_pose;
           }
 
@@ -201,19 +200,18 @@ int main(int argc, char** argv) {
       std::array<double, 7> coriolis = model.coriolis(state);
       std::array<double, 7> gravity = model.gravity(state);
 
-      // Compute torque command from joint impedance control law with gravity compensation.
+      // Compute torque command from joint impedance control law
       // Note: The answer to our Cartesian pose inverse kinematics is always in state.q_d with one
       // time step delay.
+      // 不加重力项，因为 libfranka 会自动补偿
       std::array<double, 7> tau_d_calculated;
       for (size_t i = 0; i < 7; i++) {
         tau_d_calculated[i] = k_gains[i] * (state.q_d[i] - state.q[i]) -
-                              d_gains[i] * state.dq[i] + coriolis[i] + gravity[i];
+                              d_gains[i] * state.dq[i] + coriolis[i];
       }
 
-      std::array<double, 7> tau_d_rate_limited =
-          franka::limitRate(franka::kMaxTorqueRate, tau_d_calculated, state.tau_J_d);
-
-      return tau_d_rate_limited;
+      // 直接返回计算的力矩，不使用 limitRate
+      return tau_d_calculated;
     };
 
     // Execute joint impedance control following the circle trajectory via internal IK.

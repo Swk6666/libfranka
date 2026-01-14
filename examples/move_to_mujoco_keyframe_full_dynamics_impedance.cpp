@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include <Eigen/Dense>
+
 #include <franka/duration.h>
 #include <franka/exception.h>
 #include <franka/model.h>
@@ -40,17 +42,7 @@ struct DataRecord {
   std::array<double, 7> tau_feedforward;  // Feedforward torques (M*ddq + C + g)
 };
 
-std::array<double, 7> multiplyMassMatrix(const std::array<double, 49>& mass,
-                                         const std::array<double, 7>& vector) {
-  std::array<double, 7> result{};
-  for (size_t i = 0; i < 7; i++) {
-    result[i] = 0.0;
-    for (size_t j = 0; j < 7; j++) {
-      result[i] += mass[i + 7 * j] * vector[j];
-    }
-  }
-  return result;
-}
+// 不再需要手动实现矩阵乘法函数，Eigen 会处理
 
 int main(int argc, char** argv) {
   if (argc > 2) {
@@ -119,7 +111,7 @@ int main(int argc, char** argv) {
         {{10.0, 10.0, 10.0, 10.0, 10.0, 10.0}});
 
     std::cout << "\nMoving to start position..." << std::endl;
-    MotionGenerator motion_to_start(0.5, q_start);
+    MotionGenerator motion_to_start(0.3, q_start);
     robot.control(motion_to_start);
     std::cout << "Reached start position." << std::endl;
 
@@ -130,8 +122,8 @@ int main(int argc, char** argv) {
 
     franka::Model model = robot.loadModel();
 
-    const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 250.0, 150.0, 50.0}};
-    const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0}};
+    const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 50.0, 150.0, 50.0}};
+    const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 20.0, 25.0, 15.0}};
 
     franka::QuinticPolynomial quintic(motion_time);
     quintic.reset();
@@ -143,8 +135,6 @@ int main(int argc, char** argv) {
     std::cout << "Starting quintic polynomial motion with full dynamics impedance..." << std::endl;
     std::cout << "Recording data during motion..." << std::endl;
 
-    // 【新增】在循环外定义一个变量，用于记录上一帧发送的指令
-    std::array<double, 7> last_tau_cmd{}; 
 
     robot.control([&](const franka::RobotState& state,
       franka::Duration period) -> franka::Torques {
@@ -157,55 +147,57 @@ int main(int argc, char** argv) {
       double s_ddot = franka::QuinticPolynomial::calculateAcceleration(tau) /
             (motion_time * motion_time);
 
+      // 使用 Eigen 进行所有向量运算
+      Eigen::Map<const Eigen::Vector<double, 7>> q_start_vec(q_start.data());
+      Eigen::Map<const Eigen::Vector<double, 7>> q_end_vec(q_end.data());
+      
+      // 计算期望轨迹（使用 Eigen 向量运算）
+      Eigen::Vector<double, 7> q_desired_vec = q_start_vec + s * (q_end_vec - q_start_vec);
+      Eigen::Vector<double, 7> dq_desired_vec = s_dot * (q_end_vec - q_start_vec);
+      Eigen::Vector<double, 7> ddq_desired_vec = s_ddot * (q_end_vec - q_start_vec);
+
+      // 获取动力学模型参数
+      std::array<double, 49> mass_array = model.mass(state);
+      std::array<double, 7> coriolis_array = model.coriolis(state);
+      std::array<double, 7> gravity_array = model.gravity(state);
+
+      // 转换为 Eigen 格式（列主序矩阵）
+      Eigen::Map<const Eigen::Matrix<double, 7, 7>> mass_matrix(mass_array.data());
+      Eigen::Map<const Eigen::Vector<double, 7>> coriolis_vec(coriolis_array.data());
+      Eigen::Map<const Eigen::Vector<double, 7>> gravity_vec(gravity_array.data());
+
+      // 使用 Eigen 计算前馈力矩: tau_ff = M * ddq + C
+      // 注意：不加重力，因为 libfranka 会自动补偿
+      Eigen::Vector<double, 7> tau_ff_vec = mass_matrix * ddq_desired_vec + coriolis_vec;
+
+      // 使用 Eigen 计算阻抗力矩
+      Eigen::Map<const Eigen::Vector<double, 7>> q_actual_vec(state.q.data());
+      Eigen::Map<const Eigen::Vector<double, 7>> dq_actual_vec(state.dq.data());
+      Eigen::Map<const Eigen::Vector<double, 7>> k_gains_vec(k_gains.data());
+      Eigen::Map<const Eigen::Vector<double, 7>> d_gains_vec(d_gains.data());
+
+      Eigen::Vector<double, 7> tau_impedance_vec = 
+          k_gains_vec.array() * (q_desired_vec - q_actual_vec).array() +
+          d_gains_vec.array() * (dq_desired_vec - dq_actual_vec).array();
+
+      // 使用 Eigen 计算总力矩命令
+      Eigen::Vector<double, 7> tau_cmd_vec = tau_ff_vec + tau_impedance_vec;
+
+      // 转换回 std::array 格式用于 libfranka
       std::array<double, 7> q_desired;
       std::array<double, 7> dq_desired;
-      std::array<double, 7> ddq_desired;
-      for (size_t i = 0; i < 7; i++) {
-      double delta = q_end[i] - q_start[i];
-      q_desired[i] = q_start[i] + s * delta;
-      dq_desired[i] = s_dot * delta;
-      ddq_desired[i] = s_ddot * delta;
-      }
-
-      std::array<double, 49> mass = model.mass(state);
-      std::array<double, 7> coriolis = model.coriolis(state);
-      std::array<double, 7> gravity = model.gravity(state);
-
-      std::array<double, 7> tau_ff = multiplyMassMatrix(mass, ddq_desired);
-      for (size_t i = 0; i < 7; i++) {
-        tau_ff[i] += coriolis[i] + gravity[i];
-      }
-
-      std::array<double, 7> tau_impedance;
-      for (size_t i = 0; i < 7; i++) {
-        tau_impedance[i] = k_gains[i] * (q_desired[i] - state.q[i]) +
-                           d_gains[i] * (dq_desired[i] - state.dq[i]);
-      }
-
       std::array<double, 7> tau_cmd;
-      for (size_t i = 0; i < 7; i++) {
-        tau_cmd[i] = tau_ff[i] + tau_impedance[i];
-      }
-
-      // --------------------------------------------------------------------------
-      // FIX: Handle Rate Limiting Initialization Correctly
-      // --------------------------------------------------------------------------
-      std::array<double, 7> tau_d_rate_limited;
+      std::array<double, 7> tau_impedance;
+      std::array<double, 7> tau_ff;
       
-      if (sample_index == 0) {
-          // 第一帧：没有“上一帧指令”，所以参考“当前测量力矩 state.tau_J”
-          // 这让指令从“当前实际受力”平滑过渡到“目标力矩”
-          tau_d_rate_limited = franka::limitRate(franka::kMaxTorqueRate, tau_cmd, state.tau_J);
-      } else {
-          // 【重点修改】后续帧：参考“我上一帧自己发送的指令 (last_tau_cmd)”
-          // 而不要使用 state.tau_J_d，因为 state 有延迟，可能还没更新。
-          tau_d_rate_limited = franka::limitRate(franka::kMaxTorqueRate, tau_cmd, last_tau_cmd);
-      }
+      Eigen::Map<Eigen::Vector<double, 7>>(q_desired.data()) = q_desired_vec;
+      Eigen::Map<Eigen::Vector<double, 7>>(dq_desired.data()) = dq_desired_vec;
+      Eigen::Map<Eigen::Vector<double, 7>>(tau_cmd.data()) = tau_cmd_vec;
+      Eigen::Map<Eigen::Vector<double, 7>>(tau_impedance.data()) = tau_impedance_vec;
+      Eigen::Map<Eigen::Vector<double, 7>>(tau_ff.data()) = tau_ff_vec;
       
-      // 【新增】更新历史记录，供下一帧使用
-      last_tau_cmd = tau_d_rate_limited;
-      
-      franka::Torques command(tau_d_rate_limited);
+      // 直接使用 tau_cmd，不进行变化率限制
+      franka::Torques command(tau_cmd);
 
       if (sample_index < max_samples) {
         recorded_data[sample_index].time = time;
@@ -214,7 +206,7 @@ int main(int argc, char** argv) {
         recorded_data[sample_index].dq_desired = dq_desired;
         recorded_data[sample_index].dq_actual = state.dq;
         recorded_data[sample_index].tau_J = state.tau_J;
-        recorded_data[sample_index].tau_cmd = tau_d_rate_limited;
+        recorded_data[sample_index].tau_cmd = tau_cmd;  // 记录原始命令力矩（未经限制）
         recorded_data[sample_index].tau_impedance = tau_impedance;
         recorded_data[sample_index].tau_feedforward = tau_ff;
         sample_index++;
