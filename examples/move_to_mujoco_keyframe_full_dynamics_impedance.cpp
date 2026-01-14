@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
     std::array<double, 7> q_start = {{0.0, 0.0, 0.0, -1.57, 0.0, 1.57, -0.785}};
     std::array<double, 7> q_end = {{-1, -0.35, -0.84, -2, -1, 2, 0.23}};
 
-    double motion_time = 20.0;
+    double motion_time = 5.0;
     if (argc == 2) {
       const std::string motion_time_arg(argv[1]);
       try {
