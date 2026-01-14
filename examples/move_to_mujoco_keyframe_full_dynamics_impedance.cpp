@@ -196,7 +196,7 @@ int main(int argc, char** argv) {
           tau_d_rate_limited = franka::limitRate(franka::kMaxTorqueRate, tau_cmd, state.tau_J);
       } else {
           // 后续帧：使用上一帧的指令力矩 (state.tau_J_d) 作为参考基准。
-          tau_d_rate_limited = franka::limitRate(franka::kMaxTorqueRate, tau_cmd, state.tau_J_d);
+          tau_d_rate_limited = franka::limitRate(franka::kMaxTorqueRate, tau_cmd, state.tau_J);
       }
       
       franka::Torques command(tau_d_rate_limited);
