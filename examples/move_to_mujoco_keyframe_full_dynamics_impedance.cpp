@@ -37,9 +37,11 @@ struct DataRecord {
   std::array<double, 7> dq_desired;
   std::array<double, 7> dq_actual;
   std::array<double, 7> tau_J;            // Measured joint torques
-  std::array<double, 7> tau_cmd;          // Commanded joint torques
+  std::array<double, 7> tau_cmd;          // Commanded joint torques (sent to robot)
   std::array<double, 7> tau_impedance;    // Impedance control torques
-  std::array<double, 7> tau_feedforward;  // Feedforward torques (M*ddq + C + g)
+  std::array<double, 7> tau_inertia;      // Inertial torques (M*ddq)
+  std::array<double, 7> tau_coriolis;     // Coriolis torques
+  std::array<double, 7> tau_gravity;      // Gravity torques (recorded but NOT sent)
 };
 
 // 不再需要手动实现矩阵乘法函数，Eigen 会处理
@@ -166,11 +168,21 @@ int main(int argc, char** argv) {
       Eigen::Map<const Eigen::Vector<double, 7>> coriolis_vec(coriolis_array.data());
       Eigen::Map<const Eigen::Vector<double, 7>> gravity_vec(gravity_array.data());
 
-      // 使用 Eigen 计算前馈力矩: tau_ff = M * ddq + C
-      // 注意：不加重力，因为 libfranka 会自动补偿
-      Eigen::Vector<double, 7> tau_ff_vec = mass_matrix * ddq_desired_vec + coriolis_vec;
+      // 使用 Eigen 分别计算各个力矩分量
+      
+      // 1. 惯性力矩: tau_inertia = M * ddq
+      Eigen::Vector<double, 7> tau_inertia_vec = mass_matrix * ddq_desired_vec;
+      
+      // 2. 科氏力矩: tau_coriolis = C
+      Eigen::Vector<double, 7> tau_coriolis_vec = coriolis_vec;
+      
+      // 3. 重力力矩: tau_gravity = g (仅用于记录，不发送给机器人)
+      Eigen::Vector<double, 7> tau_gravity_vec = gravity_vec;
+      
+      // 4. 前馈力矩: tau_ff = M * ddq + C (不包含重力，因为 libfranka 自动补偿)
+      Eigen::Vector<double, 7> tau_ff_vec = tau_inertia_vec + tau_coriolis_vec;
 
-      // 使用 Eigen 计算阻抗力矩
+      // 5. 阻抗力矩
       Eigen::Map<const Eigen::Vector<double, 7>> q_actual_vec(state.q.data());
       Eigen::Map<const Eigen::Vector<double, 7>> dq_actual_vec(state.dq.data());
       Eigen::Map<const Eigen::Vector<double, 7>> k_gains_vec(k_gains.data());
@@ -180,21 +192,27 @@ int main(int argc, char** argv) {
           k_gains_vec.array() * (q_desired_vec - q_actual_vec).array() +
           d_gains_vec.array() * (dq_desired_vec - dq_actual_vec).array();
 
-      // 使用 Eigen 计算总力矩命令
+      // 6. 总命令力矩: tau_cmd = tau_ff + tau_impedance
+      //    = (M*ddq + C) + tau_impedance
+      //    注意：不包含 g，因为机器人会自动补偿
       Eigen::Vector<double, 7> tau_cmd_vec = tau_ff_vec + tau_impedance_vec;
 
-      // 转换回 std::array 格式用于 libfranka
+      // 转换回 std::array 格式用于 libfranka 和数据记录
       std::array<double, 7> q_desired;
       std::array<double, 7> dq_desired;
       std::array<double, 7> tau_cmd;
       std::array<double, 7> tau_impedance;
-      std::array<double, 7> tau_ff;
+      std::array<double, 7> tau_inertia;
+      std::array<double, 7> tau_coriolis;
+      std::array<double, 7> tau_gravity;
       
       Eigen::Map<Eigen::Vector<double, 7>>(q_desired.data()) = q_desired_vec;
       Eigen::Map<Eigen::Vector<double, 7>>(dq_desired.data()) = dq_desired_vec;
       Eigen::Map<Eigen::Vector<double, 7>>(tau_cmd.data()) = tau_cmd_vec;
       Eigen::Map<Eigen::Vector<double, 7>>(tau_impedance.data()) = tau_impedance_vec;
-      Eigen::Map<Eigen::Vector<double, 7>>(tau_ff.data()) = tau_ff_vec;
+      Eigen::Map<Eigen::Vector<double, 7>>(tau_inertia.data()) = tau_inertia_vec;
+      Eigen::Map<Eigen::Vector<double, 7>>(tau_coriolis.data()) = tau_coriolis_vec;
+      Eigen::Map<Eigen::Vector<double, 7>>(tau_gravity.data()) = tau_gravity_vec;
       
       // 直接使用 tau_cmd，不进行变化率限制
       franka::Torques command(tau_cmd);
@@ -205,10 +223,12 @@ int main(int argc, char** argv) {
         recorded_data[sample_index].q_actual = state.q;
         recorded_data[sample_index].dq_desired = dq_desired;
         recorded_data[sample_index].dq_actual = state.dq;
-        recorded_data[sample_index].tau_J = state.tau_J;
-        recorded_data[sample_index].tau_cmd = tau_cmd;  // 记录原始命令力矩（未经限制）
-        recorded_data[sample_index].tau_impedance = tau_impedance;
-        recorded_data[sample_index].tau_feedforward = tau_ff;
+        recorded_data[sample_index].tau_J = state.tau_J;           // 测量力矩
+        recorded_data[sample_index].tau_cmd = tau_cmd;             // 命令力矩（发送给机器人）
+        recorded_data[sample_index].tau_impedance = tau_impedance; // 阻抗力矩
+        recorded_data[sample_index].tau_inertia = tau_inertia;     // 惯性力矩
+        recorded_data[sample_index].tau_coriolis = tau_coriolis;   // 科氏力矩
+        recorded_data[sample_index].tau_gravity = tau_gravity;     // 重力力矩（仅记录）
         sample_index++;
       }
 
@@ -246,10 +266,12 @@ int main(int argc, char** argv) {
     for (int j = 1; j <= 7; j++) csv_file << ",q_actual_" << j;
     for (int j = 1; j <= 7; j++) csv_file << ",dq_desired_" << j;
     for (int j = 1; j <= 7; j++) csv_file << ",dq_actual_" << j;
-    for (int j = 1; j <= 7; j++) csv_file << ",tau_J_" << j;
-    for (int j = 1; j <= 7; j++) csv_file << ",tau_cmd_" << j;
-    for (int j = 1; j <= 7; j++) csv_file << ",tau_impedance_" << j;
-    for (int j = 1; j <= 7; j++) csv_file << ",tau_feedforward_" << j;
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_J_" << j;           // 测量力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_cmd_" << j;         // 命令力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_impedance_" << j;   // 阻抗力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_inertia_" << j;     // 惯性力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_coriolis_" << j;    // 科氏力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_gravity_" << j;     // 重力力矩
     csv_file << "\n";
 
     csv_file << std::fixed << std::setprecision(6);
@@ -262,7 +284,9 @@ int main(int argc, char** argv) {
       for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_J[i];
       for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_cmd[i];
       for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_impedance[i];
-      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_feedforward[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_inertia[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_coriolis[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_gravity[i];
       csv_file << "\n";
     }
 

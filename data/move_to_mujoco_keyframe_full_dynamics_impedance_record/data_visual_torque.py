@@ -20,42 +20,63 @@ def main():
     
     time = df['time'].values
     
-    # Create figure with 7 subplots
-    fig, axes = plt.subplots(7, 1, figsize=(14, 16), sharex=True)
-    fig.suptitle('Joint Torques Comparison\n(Full Dynamics Impedance Control: tau_cmd = tau_ff + tau_impedance)', 
+    # Create figure with 2 rows x 4 columns subplots
+    fig, axes = plt.subplots(2, 4, figsize=(18, 8), sharex=True)
+    fig.suptitle('Joint Torques Decomposition\n(tau_cmd = tau_feedforward + tau_impedance = (M*ddq + C + g) + tau_impedance)', 
                  fontsize=14, fontweight='bold')
     
     colors = {
-        'measured': '#e74c3c',      # Red - actual measured torque
         'commanded': '#2ecc71',     # Green - commanded torque
-        'impedance': '#3498db',     # Blue - impedance torque
-        'feedforward': '#9b59b6'    # Purple - feedforward torque (M*ddq + C + g)
+        'measured': '#e74c3c',      # Red - measured torque
+        'gravity': '#9b59b6',       # Purple - gravity torque
+        'inertia_coriolis': '#f39c12',  # Orange - inertia + coriolis
+        'feedforward': '#e91e63',   # Pink - feedforward (M*ddq + C + g)
+        'impedance': '#3498db'      # Blue - impedance torque
     }
     
+    # Flatten axes array for easier indexing
+    axes_flat = axes.flatten()
+    
     for i in range(7):
-        ax = axes[i]
+        ax = axes_flat[i]
         
-        tau_measured = df[f'tau_J_{i+1}'].values
         tau_cmd = df[f'tau_cmd_{i+1}'].values
+        tau_measured = df[f'tau_J_{i+1}'].values
+        tau_gravity = df[f'tau_gravity_{i+1}'].values
+        tau_inertia = df[f'tau_inertia_{i+1}'].values
+        tau_coriolis = df[f'tau_coriolis_{i+1}'].values
         tau_impedance = df[f'tau_impedance_{i+1}'].values
-        tau_feedforward = df[f'tau_feedforward_{i+1}'].values
         
-        ax.plot(time, tau_measured, color=colors['measured'], linewidth=1.2, 
-                label='Measured (tau_J)', alpha=0.9)
-        ax.plot(time, tau_cmd, color=colors['commanded'], linewidth=1.2, 
-                label='Commanded (tau_cmd)', alpha=0.9)
-        ax.plot(time, tau_impedance, color=colors['impedance'], linewidth=1.2, 
-                label='Impedance', alpha=0.9)
+        # Calculate combined torques
+        tau_inertia_coriolis = tau_inertia + tau_coriolis  # M*ddq + C
+        tau_feedforward = tau_inertia + tau_coriolis + tau_gravity  # M*ddq + C + g
+        
+        # Plot in order of importance (back to front)
         ax.plot(time, tau_feedforward, color=colors['feedforward'], linewidth=1.2, 
-                label='Feedforward (M*ddq+C+g)', alpha=0.9)
+                label='Feedforward (M*ddq+C+g)', alpha=0.7, linestyle='--')
+        ax.plot(time, tau_inertia_coriolis, color=colors['inertia_coriolis'], linewidth=1.2, 
+                label='Inertia+Coriolis (M*ddq+C)', alpha=0.7, linestyle=':')
+        ax.plot(time, tau_gravity, color=colors['gravity'], linewidth=1.2, 
+                label='Gravity', alpha=0.7, linestyle=':')
+        ax.plot(time, tau_impedance, color=colors['impedance'], linewidth=1.3, 
+                label='Impedance', alpha=0.8)
+        ax.plot(time, tau_measured, color=colors['measured'], linewidth=1.5, 
+                label='Measured', alpha=0.9)
+        ax.plot(time, tau_cmd, color=colors['commanded'], linewidth=1.5, 
+                label='Commanded', alpha=0.9)
         
-        ax.set_ylabel(f'Joint {i+1}\n(Nm)', fontsize=10)
+        ax.set_ylabel(f'Joint {i+1} (Nm)', fontsize=9)
         ax.grid(True, alpha=0.3)
         
         if i == 0:
-            ax.legend(loc='upper right', fontsize=8, ncol=2)
+            ax.legend(loc='best', fontsize=7, ncol=2)
+        
+        # Add x-label to bottom row
+        if i >= 4:  # Bottom row (indices 4, 5, 6, 7)
+            ax.set_xlabel('Time (s)', fontsize=10)
     
-    axes[-1].set_xlabel('Time (s)', fontsize=12)
+    # Hide the last subplot (index 7) as we only have 7 joints
+    axes_flat[7].axis('off')
     
     plt.tight_layout()
     
