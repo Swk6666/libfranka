@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Compare desired and actual joint angles for all 7 joints.
+Visualize desired and actual joint velocities for all 7 joints.
 Full dynamics impedance control data visualization.
 """
 
@@ -22,22 +22,22 @@ def main():
     
     # Create figure with 7 subplots
     fig, axes = plt.subplots(7, 1, figsize=(12, 14), sharex=True)
-    fig.suptitle('Joint Angles: Desired vs Actual\n(Full Dynamics Impedance Control)', 
+    fig.suptitle('Joint Velocities: Desired vs Actual\n(Full Dynamics Impedance Control)', 
                  fontsize=14, fontweight='bold')
     
     colors = {'desired': '#e74c3c', 'actual': '#3498db'}
     
     for i in range(7):
         ax = axes[i]
-        q_desired = df[f'q_desired_{i+1}'].values
-        q_actual = df[f'q_actual_{i+1}'].values
+        dq_desired = df[f'dq_desired_{i+1}'].values
+        dq_actual = df[f'dq_actual_{i+1}'].values
         
-        ax.plot(time, q_desired, color=colors['desired'], linewidth=1.5, 
+        ax.plot(time, dq_desired, color=colors['desired'], linewidth=1.5, 
                 label='Desired', alpha=0.9)
-        ax.plot(time, q_actual, color=colors['actual'], linewidth=1.5, 
+        ax.plot(time, dq_actual, color=colors['actual'], linewidth=1.5, 
                 label='Actual', linestyle='--', alpha=0.9)
         
-        ax.set_ylabel(f'Joint {i+1}\n(rad)', fontsize=10)
+        ax.set_ylabel(f'Joint {i+1}\n(rad/s)', fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.legend(loc='upper right', fontsize=8)
     
@@ -46,7 +46,7 @@ def main():
     plt.tight_layout()
     
     # Save figure
-    output_path = os.path.join(script_dir, 'compare_qpos.png')
+    output_path = os.path.join(script_dir, 'visualize_velocity.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Figure saved to: {output_path}")
     

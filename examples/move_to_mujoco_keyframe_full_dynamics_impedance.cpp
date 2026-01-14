@@ -142,18 +142,8 @@ int main(int argc, char** argv) {
 
     std::cout << "Starting quintic polynomial motion with full dynamics impedance..." << std::endl;
     std::cout << "Recording data during motion..." << std::endl;
-
-    // 在 robot.control 之前定义变量
-    bool first_run = true;
-    std::array<double, 7> initial_pose{}; 
-
     robot.control([&](const franka::RobotState& state,
-                      franka::Duration period) -> franka::Torques {
-      if (first_run) {
-        initial_pose = state.q;
-        first_run = false;
-      }
-
+      franka::Duration period) -> franka::Torques {
       double dt = period.toSec();
       double s = quintic.step(dt);
       double time = quintic.getTime();
@@ -161,22 +151,16 @@ int main(int argc, char** argv) {
 
       double s_dot = franka::QuinticPolynomial::calculateVelocity(tau) / motion_time;
       double s_ddot = franka::QuinticPolynomial::calculateAcceleration(tau) /
-                      (motion_time * motion_time);
+            (motion_time * motion_time);
 
       std::array<double, 7> q_desired;
       std::array<double, 7> dq_desired;
       std::array<double, 7> ddq_desired;
-      
-      // 2. 计算轨迹时，使用 initial_pose 而不是 q_start
       for (size_t i = 0; i < 7; i++) {
-        // 这里的 q_start 仍然是你的目标起始点，但为了平滑，应该从 initial_pose 过渡到 q_end
-        // 或者，如果你只是想做点对点运动，应该重新定义 delta：
-        
-        double delta = q_end[i] - initial_pose[i]; // 使用捕捉到的初始位置
-        q_desired[i] = initial_pose[i] + s * delta; // 从捕捉到的位置开始规划
-        
-        dq_desired[i] = s_dot * delta;
-        ddq_desired[i] = s_ddot * delta;
+      double delta = q_end[i] - q_start[i];
+      q_desired[i] = q_start[i] + s * delta;
+      dq_desired[i] = s_dot * delta;
+      ddq_desired[i] = s_ddot * delta;
       }
 
       std::array<double, 49> mass = model.mass(state);
