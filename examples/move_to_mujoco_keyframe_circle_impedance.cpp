@@ -6,6 +6,10 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <vector>
+#include <fstream>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <franka/duration.h>
 #include <franka/exception.h>
@@ -111,13 +115,8 @@ int main(int argc, char** argv) {
     std::cout << "Circular segment time: " << circle_time << " s" << std::endl;
     std::cout << "Total motion time: " << (line_time + circle_time) << " s" << std::endl;
 
-    // Generate circle trajectory (relative to origin, will be applied as offset)
-    // Time step matches robot control frequency (1kHz)
-    constexpr double kTimeStep = 0.001;
-    franka::CircleTrajectory circle_trajectory = 
-        franka::generateCircleTrajectory(radius, line_time, circle_time, kTimeStep);
-    
-    std::cout << "Generated " << circle_trajectory.points.size() << " trajectory points" << std::endl;
+    const double total_time = line_time + circle_time;
+    std::cout << "Using analytic quintic trajectory (total time: " << total_time << " s)" << std::endl;
 
     std::cout << "\nConnecting to robot at " << robot_ip << "..." << std::endl;
     franka::Robot robot(robot_ip);
@@ -152,15 +151,25 @@ int main(int argc, char** argv) {
     std::array<double, 16> initial_pose;
     std::array<double, 16> last_pose;
 
-    // size_t 在c++中是无符号整型，专门用来表示大小，数量，索引
-    size_t trajectory_index = 0;
-
     bool initialized = false;
     double time = 0.0;
 
+    // Data recording structures
+    struct TrajectoryData {
+      double timestamp;
+      double desired_x, desired_y, desired_z;
+      double actual_x, actual_y, actual_z;
+      double commanded_x, commanded_y, commanded_z;
+      double q_desired[7];  // 期望关节角度
+      double q_actual[7];   // 实际关节角度
+      double tau[7];        // 实际关节力矩
+    };
+    std::vector<TrajectoryData> recorded_data;
+    recorded_data.reserve(static_cast<size_t>((line_time + circle_time) * 1000) + 1000);
+
 
     auto cartesian_pose_callback =
-        [&circle_trajectory, &initial_pose, &last_pose, &trajectory_index, &initialized, &time](
+        [&initial_pose, &last_pose, &initialized, &time, radius, line_time, circle_time, total_time, &recorded_data](
             const franka::RobotState& robot_state,
             franka::Duration period) -> franka::CartesianPose 
         {
@@ -173,15 +182,8 @@ int main(int argc, char** argv) {
           }
 
           time += period.toSec();
-
-          // Advance trajectory index based on elapsed time to avoid large jumps on missed cycles.
-          while (trajectory_index + 1 < circle_trajectory.points.size() &&
-                 circle_trajectory.points[trajectory_index + 1].time <= time) {
-            trajectory_index++;
-          }
-
-          // Get current trajectory point
-          const auto& point = circle_trajectory.points[trajectory_index];
+          franka::CircleTrajectoryPoint point =
+              franka::evaluateCircleTrajectory(time, radius, line_time, circle_time);
 
           // Apply trajectory offset to initial pose
           // The circle trajectory is in the XY plane (robot base frame)
@@ -190,8 +192,31 @@ int main(int argc, char** argv) {
           new_pose[13] += point.position[1];  // Y offset
           new_pose[14] += point.position[2];  // Z offset (should be 0 for XY plane circle)
 
+          // Record trajectory data
+          TrajectoryData data;
+          data.timestamp = time;
+          // Desired position (from trajectory generation)
+          data.desired_x = initial_pose[12] + point.position[0];
+          data.desired_y = initial_pose[13] + point.position[1];
+          data.desired_z = initial_pose[14] + point.position[2];
+          // Actual measured position
+          data.actual_x = robot_state.O_T_EE[12];
+          data.actual_y = robot_state.O_T_EE[13];
+          data.actual_z = robot_state.O_T_EE[14];
+          // Commanded position (last commanded pose)
+          data.commanded_x = robot_state.O_T_EE_c[12];
+          data.commanded_y = robot_state.O_T_EE_c[13];
+          data.commanded_z = robot_state.O_T_EE_c[14];
+          // Joint angles
+          for (size_t i = 0; i < 7; i++) {
+            data.q_desired[i] = robot_state.q_d[i];
+            data.q_actual[i] = robot_state.q[i];
+            data.tau[i] = robot_state.tau_J[i];
+          }
+          recorded_data.push_back(data);
+
           last_pose = new_pose;
-          if (time >= circle_trajectory.points.back().time) {
+          if (time >= total_time) {
             return franka::MotionFinished(franka::CartesianPose(last_pose));
           }
 
@@ -226,6 +251,89 @@ int main(int argc, char** argv) {
     robot.control(impedance_control_callback, cartesian_pose_callback);
 
     std::cout << "\nCircle trajectory motion completed successfully!" << std::endl;
+    
+    // Save recorded data to CSV file - 保存到源文件上级目录的 data 文件夹下
+    // __FILE__ 是当前源文件的路径，从中提取目录
+    std::string source_path = __FILE__;  // 例如: /home/swk/libfranka/examples/xxx.cpp
+    std::string source_dir = source_path.substr(0, source_path.find_last_of("/\\"));  // examples 目录
+    std::string parent_dir = source_dir.substr(0, source_dir.find_last_of("/\\"));    // libfranka 目录
+    std::string data_dir = parent_dir + "/data/circle_trajectory_impedance";
+    std::string filename = data_dir + "/circle_trajectory_data_impedance.csv";
+    
+    // 创建目录（如果不存在）
+    mkdir((parent_dir + "/data").c_str(), 0755);
+    mkdir(data_dir.c_str(), 0755);
+    
+    std::ofstream data_file(filename);
+    
+    if (data_file.is_open()) {
+      // Write CSV header
+      data_file << "timestamp,desired_x,desired_y,desired_z,actual_x,actual_y,actual_z,commanded_x,commanded_y,commanded_z,";
+      data_file << "error_x,error_y,error_z,error_norm,";
+      data_file << "q_d0,q_d1,q_d2,q_d3,q_d4,q_d5,q_d6,";
+      data_file << "q0,q1,q2,q3,q4,q5,q6,";
+      data_file << "tau0,tau1,tau2,tau3,tau4,tau5,tau6" << std::endl;
+      
+      // Write data rows
+      for (const auto& data : recorded_data) {
+        double error_x = data.desired_x - data.actual_x;
+        double error_y = data.desired_y - data.actual_y;
+        double error_z = data.desired_z - data.actual_z;
+        double error_norm = std::sqrt(error_x * error_x + error_y * error_y + error_z * error_z);
+        
+        data_file << std::fixed << std::setprecision(6);
+        data_file << data.timestamp << ","
+                  << data.desired_x << "," << data.desired_y << "," << data.desired_z << ","
+                  << data.actual_x << "," << data.actual_y << "," << data.actual_z << ","
+                  << data.commanded_x << "," << data.commanded_y << "," << data.commanded_z << ","
+                  << error_x << "," << error_y << "," << error_z << "," << error_norm << ",";
+        
+        // Write joint desired angles
+        for (size_t i = 0; i < 7; i++) {
+          data_file << data.q_desired[i];
+          if (i < 6) data_file << ",";
+        }
+        data_file << ",";
+        
+        // Write joint actual angles
+        for (size_t i = 0; i < 7; i++) {
+          data_file << data.q_actual[i];
+          if (i < 6) data_file << ",";
+        }
+        data_file << ",";
+        
+        // Write joint torques
+        for (size_t i = 0; i < 7; i++) {
+          data_file << data.tau[i];
+          if (i < 6) data_file << ",";
+        }
+        data_file << std::endl;
+      }
+      
+      data_file.close();
+      std::cout << "\nTrajectory data saved to: " << filename << std::endl;
+      std::cout << "Total data points recorded: " << recorded_data.size() << std::endl;
+      
+      // Print statistics
+      if (!recorded_data.empty()) {
+        double max_error = 0.0;
+        double sum_error = 0.0;
+        for (const auto& data : recorded_data) {
+          double error_x = data.desired_x - data.actual_x;
+          double error_y = data.desired_y - data.actual_y;
+          double error_z = data.desired_z - data.actual_z;
+          double error = std::sqrt(error_x * error_x + error_y * error_y + error_z * error_z);
+          max_error = std::max(max_error, error);
+          sum_error += error;
+        }
+        double avg_error = sum_error / recorded_data.size();
+        std::cout << "\n=== Tracking Performance ===" << std::endl;
+        std::cout << "Average tracking error: " << (avg_error * 1000.0) << " mm" << std::endl;
+        std::cout << "Maximum tracking error: " << (max_error * 1000.0) << " mm" << std::endl;
+      }
+    } else {
+      std::cerr << "Warning: Could not open file for writing: " << filename << std::endl;
+    }
     
   } 
   catch (const franka::Exception& e) 

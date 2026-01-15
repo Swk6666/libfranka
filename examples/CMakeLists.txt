@@ -52,7 +52,6 @@ set(EXAMPLES
   force_control
   generate_cartesian_pose_motion
   generate_cartesian_velocity_motion
-  generate_circle_trajectory
   generate_consecutive_motions
   generate_elbow_motion
   generate_joint_position_motion
@@ -65,8 +64,7 @@ set(EXAMPLES
   move_to_mujoco_keyframe_p2p
   move_to_mujoco_keyframe_polynomial
   move_to_mujoco_keyframe_polynomial_record
-  move_to_mujoco_keyframe_circle
-  move_to_mujoco_keyframe_circle_trajectory
+  move_to_mujoco_keyframe_circle_cartesian
   move_to_mujoco_keyframe_circle_impedance
   move_to_mujoco_keyframe_full_dynamics_impedance
   print_joint_poses

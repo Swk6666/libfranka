@@ -114,7 +114,8 @@ inline CircleTrajectoryPoint evaluateCircleTrajectory(double time,
 
   const std::array<double, 3> line_delta = {{radius, 0.0, 0.0}};
 
-  if (clamped_time <= line_time) {
+  if (clamped_time <= line_time) 
+  {
     const double tau = clamped_time / line_time;
     const double s = QuinticPolynomial::calculate(tau);
     const double s_dot = QuinticPolynomial::calculateVelocity(tau) / line_time;
