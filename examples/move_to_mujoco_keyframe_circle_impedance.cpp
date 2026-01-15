@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
     const std::string robot_ip = "172.16.1.2";
     
     // Initial joint configuration (same as generate_cartesian_pose_motion.cpp)
-    std::array<double, 7> q_start = {{0.0, 0.0, 0.0, -1.57, 0.0, 1.57, -0.785}};
+    std::array<double, 7> q_start = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
     
     // Circle trajectory parameters
     double radius = 0.1;      // Default 5cm radius

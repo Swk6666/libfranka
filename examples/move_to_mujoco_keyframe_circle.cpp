@@ -107,13 +107,8 @@ int main(int argc, char** argv) {
     std::cout << "Circular segment time: " << circle_time << " s" << std::endl;
     std::cout << "Total motion time: " << (line_time + circle_time) << " s" << std::endl;
 
-    // Generate circle trajectory (relative to origin, will be applied as offset)
-    // Time step matches robot control frequency (1kHz)
-    constexpr double kTimeStep = 0.001;
-    franka::CircleTrajectory circle_trajectory = 
-        franka::generateCircleTrajectory(radius, line_time, circle_time, kTimeStep);
-    
-    std::cout << "Generated " << circle_trajectory.points.size() << " trajectory points" << std::endl;
+    const double total_time = line_time + circle_time;
+    std::cout << "Using analytic quintic trajectory (total time: " << total_time << " s)" << std::endl;
 
     std::cout << "\nConnecting to robot at " << robot_ip << "..." << std::endl;
     franka::Robot robot(robot_ip);
@@ -140,18 +135,16 @@ int main(int argc, char** argv) {
     // Variables for control loop
     std::array<double, 16> initial_pose;
 
-    // size_t 在c++中是无符号整型，专门用来表示大小，数量，索引
-    size_t trajectory_index = 0;
-
     bool initialized = false;
+    double time = 0.0;
 
     std::cout << "Starting circle trajectory motion..." << std::endl;
     std::cout << "Phase 1: Linear segment (center -> edge)" << std::endl;
 
     // Execute Cartesian pose control following the circle trajectory
-    robot.control([&circle_trajectory, &initial_pose, &trajectory_index, &initialized, line_time](
+    robot.control([&initial_pose, &initialized, &time, radius, line_time, circle_time, total_time](
                       const franka::RobotState& robot_state,
-                      franka::Duration /*period*/) -> franka::CartesianPose {
+                      franka::Duration period) -> franka::CartesianPose {
       
       // Initialize: record the initial end-effector pose
       if (!initialized) {
@@ -159,14 +152,9 @@ int main(int argc, char** argv) {
         initial_pose = robot_state.O_T_EE_c;
       }
 
-      // Check if trajectory is complete
-      if (trajectory_index >= circle_trajectory.points.size()) {
-        std::cout << std::endl << "Circle trajectory completed!" << std::endl;
-        return franka::MotionFinished(franka::CartesianPose(initial_pose));
-      }
-
-      // Get current trajectory point
-      const auto& point = circle_trajectory.points[trajectory_index];
+      time += period.toSec();
+      franka::CircleTrajectoryPoint point =
+          franka::evaluateCircleTrajectory(time, radius, line_time, circle_time);
       
 
       // Apply trajectory offset to initial pose
@@ -176,8 +164,10 @@ int main(int argc, char** argv) {
       new_pose[13] += point.position[1];  // Y offset
       new_pose[14] += point.position[2];  // Z offset (should be 0 for XY plane circle)
 
-      // Advance to next trajectory point
-      trajectory_index++;
+      if (time >= total_time) {
+        std::cout << std::endl << "Circle trajectory completed!" << std::endl;
+        return franka::MotionFinished(new_pose);
+      }
 
       return new_pose;
     });
