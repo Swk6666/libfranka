@@ -66,8 +66,8 @@ int main(int argc, char** argv) {
     
     // Circle trajectory parameters
     double radius = 0.1;      // Default 5cm radius
-    double line_time = 10.0;    // Default 2 seconds for linear segment
-    double circle_time = 20.0;  // Default 4 seconds for circular segment
+    double line_time = 4.0;    // Default 2 seconds for linear segment
+    double circle_time = 6.0;  // Default 4 seconds for circular segment
     
     // Parse optional arguments
     if (argc >= 2) {
