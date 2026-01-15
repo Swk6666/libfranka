@@ -227,18 +227,24 @@ int main(int argc, char** argv) {
                                           const franka::RobotState& state,
                                           franka::Duration /*period*/) -> franka::Torques 
     {
-      // Read current coriolis and gravity terms from model.
+      // Read current coriolis terms from model.
       std::array<double, 7> coriolis = model.coriolis(state);
-      std::array<double, 7> gravity = model.gravity(state);
+      
+      // Get mass matrix and extract diagonal elements (inertia)
+      std::array<double, 49> mass_matrix = model.mass(state);
 
-      // Compute torque command from joint impedance control law
+      // Compute torque command from joint impedance control law with acceleration feedforward
       // Note: The answer to our Cartesian pose inverse kinematics is always in state.q_d with one
       // time step delay.
       // 不加重力项，因为 libfranka 会自动补偿
       std::array<double, 7> tau_d_calculated;
       for (size_t i = 0; i < 7; i++) {
+        double inertia = mass_matrix[i * 7 + i];  // Extract diagonal element
+        
         tau_d_calculated[i] = k_gains[i] * (state.q_d[i] - state.q[i]) -
-                              d_gains[i] * state.dq[i] + coriolis[i];
+                              d_gains[i] * (state.dq[i] - state.dq_d[i]) +  // Velocity error damping
+                              coriolis[i] +
+                              inertia * state.ddq_d[i];  // Acceleration feedforward
       }
 
       // 直接返回计算的力矩，不使用 limitRate
