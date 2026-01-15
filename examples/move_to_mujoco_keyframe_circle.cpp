@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     // Circle trajectory parameters
     double radius = 0.1;      // Default 5cm radius
     double line_time = 4.0;    // Default 2 seconds for linear segment
-    double circle_time = 10.0;  // Default 4 seconds for circular segment
+    double circle_time = 6.0;  // Default 4 seconds for circular segment
     
     // Parse optional arguments
     if (argc >= 2) {
@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
 
     // First move the robot to the initial joint configuration
     std::cout << "\nMoving to initial joint configuration..." << std::endl;
-    MotionGenerator motion_generator(0.5, q_start);
+    MotionGenerator motion_generator(0.3, q_start);
     robot.control(motion_generator);
     std::cout << "Reached initial configuration." << std::endl;
 
