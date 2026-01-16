@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
     franka::Model model = robot.loadModel();
 
     // Set gains for the joint impedance control.
-    const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 250.0, 150.0, 50.0}};
+    const std::array<double, 7> k_gains = {{700.0, 700.0, 700.0, 700.0, 750.0, 350.0, 70.0}};
     const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0}};
   
     // Variables for control loop
