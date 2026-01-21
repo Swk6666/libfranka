@@ -10,9 +10,10 @@
 #include <vector>
 #include <fstream>
 
+#include <Eigen/Dense>
+
 #include <franka/duration.h>
 #include <franka/exception.h>
-#include <franka/lowpass_filter.h>
 #include <franka/model.h>
 #include <franka/robot.h>
 #include <franka/circle_trajectory.h>
@@ -145,8 +146,14 @@ int main(int argc, char** argv) {
     franka::Model model = robot.loadModel();
 
     // Set gains for the joint impedance control.
-    const std::array<double, 7> k_gains = {{700.0, 700.0, 700.0, 700.0, 750.0, 350.0, 70.0}};
-    const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0}};
+    const double k_gain_scale = 1.0;
+    const double d_gain_scale = 1.0;
+    Eigen::Array<double, 7, 1> k_gains;
+    k_gains << 700.0, 700.0, 700.0, 700.0, 750.0, 350.0, 70.0;
+    k_gains *= k_gain_scale;
+    Eigen::Array<double, 7, 1> d_gains;
+    d_gains << 50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0;
+    d_gains *= d_gain_scale;
   
     // Variables for control loop
     CoordinateTransform transformer;
@@ -185,9 +192,10 @@ int main(int argc, char** argv) {
     std::array<double, 7> last_tau_gravity = {0};
     std::array<double, 7> last_tau_k = {0};
     std::array<double, 7> last_tau_d = {0};
-    const double dq_cutoff_frequency = 50.0;
-    std::array<double, 7> dq_filtered{};
-    bool dq_filter_initialized = false;
+    constexpr size_t kDqFilterSize = 5;
+    std::array<std::array<double, 7>, kDqFilterSize> dq_buffer{};
+    size_t dq_filter_index = 0;
+    size_t dq_filter_count = 0;
 
 
     auto cartesian_pose_callback =
@@ -275,19 +283,23 @@ int main(int argc, char** argv) {
 
     auto impedance_control_callback = [&model, k_gains, d_gains, 
          &last_tau_cmd, &last_tau_impedance, &last_tau_inertia, &last_tau_coriolis, &last_tau_gravity, &last_tau_k, &last_tau_d,
-         &dq_filtered, &dq_filter_initialized, dq_cutoff_frequency](
+         &dq_buffer, &dq_filter_index, &dq_filter_count](
                                           const franka::RobotState& state,
-                                          franka::Duration period) -> franka::Torques 
+                                          franka::Duration /*period*/) -> franka::Torques 
     {
-      double dt = period.toSec();
-      if (!dq_filter_initialized) {
-        dq_filtered = state.dq;
-        dq_filter_initialized = true;
-      } else {
-        for (size_t i = 0; i < 7; i++) {
-          dq_filtered[i] =
-              franka::lowpassFilter(dt, state.dq[i], dq_filtered[i], dq_cutoff_frequency);
+      dq_buffer[dq_filter_index] = state.dq;
+      dq_filter_index = (dq_filter_index + 1) % kDqFilterSize;
+      if (dq_filter_count < kDqFilterSize) {
+        dq_filter_count++;
+      }
+
+      std::array<double, 7> dq_filtered{};
+      for (size_t i = 0; i < 7; i++) {
+        double sum = 0.0;
+        for (size_t j = 0; j < dq_filter_count; j++) {
+          sum += dq_buffer[j][i];
         }
+        dq_filtered[i] = sum / static_cast<double>(dq_filter_count);
       }
 
       // Read dynamics model parameters
@@ -304,8 +316,8 @@ int main(int argc, char** argv) {
         double inertia = mass_matrix[i * 7 + i];  // Extract diagonal element
         
         // 分别计算各个力矩分量
-        double tau_k = k_gains[i] * (state.q_d[i] - state.q[i]);           // 刚度力矩
-        double tau_d = -d_gains[i] * (dq_filtered[i] - state.dq_d[i]);     // 阻尼力矩
+        double tau_k = k_gains(i) * (state.q_d[i] - state.q[i]);           // 刚度力矩
+        double tau_d = -d_gains(i) * (dq_filtered[i] - state.dq_d[i]);     // 阻尼力矩
         double tau_impedance = tau_k + tau_d;                               // 阻抗力矩
         double tau_inertia = inertia * state.ddq_d[i];                     // 惯性力矩
         double tau_coriolis = coriolis[i];                                  // 科氏力矩

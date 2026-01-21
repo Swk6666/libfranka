@@ -14,7 +14,6 @@
 
 #include <franka/duration.h>
 #include <franka/exception.h>
-#include <franka/lowpass_filter.h>
 #include <franka/model.h>
 #include <franka/quintic_polynomial.h>
 #include <franka/rate_limiting.h>
@@ -129,8 +128,14 @@ int main(int argc, char** argv) {
 
     franka::Model model = robot.loadModel();
 
-    const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 50.0, 150.0, 50.0}};
-    const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 20.0, 25.0, 15.0}};
+    const double k_gain_scale = 1.0;
+    const double d_gain_scale = 1.0;
+    Eigen::Array<double, 7, 1> k_gains;
+    k_gains << 600.0, 600.0, 600.0, 600.0, 50.0, 150.0, 50.0;
+    k_gains *= k_gain_scale;
+    Eigen::Array<double, 7, 1> d_gains;
+    d_gains << 50.0, 50.0, 50.0, 50.0, 20.0, 25.0, 15.0;
+    d_gains *= d_gain_scale;
 
     franka::QuinticPolynomial quintic(motion_time);
     quintic.reset();
@@ -138,9 +143,10 @@ int main(int argc, char** argv) {
     const size_t max_samples = static_cast<size_t>(motion_time * 1000) + 100;
     std::vector<DataRecord> recorded_data(max_samples);
     size_t sample_index = 0;
-    const double dq_cutoff_frequency = 50.0;
-    std::array<double, 7> dq_filtered{};
-    bool dq_filter_initialized = false;
+    constexpr size_t kDqFilterSize = 5;
+    std::array<std::array<double, 7>, kDqFilterSize> dq_buffer{};
+    size_t dq_filter_index = 0;
+    size_t dq_filter_count = 0;
 
     std::cout << "Starting quintic polynomial motion with full dynamics impedance..." << std::endl;
     std::cout << "Recording data during motion..." << std::endl;
@@ -149,14 +155,19 @@ int main(int argc, char** argv) {
     robot.control([&](const franka::RobotState& state,
       franka::Duration period) -> franka::Torques {
       double dt = period.toSec();
-      if (!dq_filter_initialized) {
-        dq_filtered = state.dq;
-        dq_filter_initialized = true;
-      } else {
-        for (size_t i = 0; i < 7; i++) {
-          dq_filtered[i] =
-              franka::lowpassFilter(dt, state.dq[i], dq_filtered[i], dq_cutoff_frequency);
+      dq_buffer[dq_filter_index] = state.dq;
+      dq_filter_index = (dq_filter_index + 1) % kDqFilterSize;
+      if (dq_filter_count < kDqFilterSize) {
+        dq_filter_count++;
+      }
+
+      std::array<double, 7> dq_filtered{};
+      for (size_t i = 0; i < 7; i++) {
+        double sum = 0.0;
+        for (size_t j = 0; j < dq_filter_count; j++) {
+          sum += dq_buffer[j][i];
         }
+        dq_filtered[i] = sum / static_cast<double>(dq_filter_count);
       }
 
       double s = quintic.step(dt);
@@ -203,16 +214,13 @@ int main(int argc, char** argv) {
       // 5. 阻抗力矩（分别计算 K 和 D 部分）
       Eigen::Map<const Eigen::Vector<double, 7>> q_actual_vec(state.q.data());
       Eigen::Map<const Eigen::Vector<double, 7>> dq_actual_vec(dq_filtered.data());
-      Eigen::Map<const Eigen::Vector<double, 7>> k_gains_vec(k_gains.data());
-      Eigen::Map<const Eigen::Vector<double, 7>> d_gains_vec(d_gains.data());
-
       // 刚度力矩: tau_k = K * (q_d - q)
       Eigen::Vector<double, 7> tau_k_vec = 
-          k_gains_vec.array() * (q_desired_vec - q_actual_vec).array();
+          (k_gains * (q_desired_vec - q_actual_vec).array()).matrix();
       
       // 阻尼力矩: tau_d = D * (dq_d - dq)
       Eigen::Vector<double, 7> tau_d_vec = 
-          d_gains_vec.array() * (dq_desired_vec - dq_actual_vec).array();
+          (d_gains * (dq_desired_vec - dq_actual_vec).array()).matrix();
       
       // 总阻抗力矩: tau_impedance = tau_k + tau_d
       Eigen::Vector<double, 7> tau_impedance_vec = tau_k_vec + tau_d_vec;
