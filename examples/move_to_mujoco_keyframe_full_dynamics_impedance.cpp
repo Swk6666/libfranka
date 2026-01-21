@@ -18,6 +18,7 @@
 #include <franka/quintic_polynomial.h>
 #include <franka/rate_limiting.h>
 #include <franka/robot.h>
+#include <franka/CoordinateTransform.h>
 
 #include "examples_common.h"
 
@@ -39,6 +40,8 @@ struct DataRecord {
   std::array<double, 7> tau_J;            // Measured joint torques
   std::array<double, 7> tau_cmd;          // Commanded joint torques (sent to robot)
   std::array<double, 7> tau_impedance;    // Impedance control torques
+  std::array<double, 7> tau_k;            // Stiffness torques (K * position error)
+  std::array<double, 7> tau_d;            // Damping torques (D * velocity error)
   std::array<double, 7> tau_inertia;      // Inertial torques (M*ddq)
   std::array<double, 7> tau_coriolis;     // Coriolis torques
   std::array<double, 7> tau_gravity;      // Gravity torques (recorded but NOT sent)
@@ -57,8 +60,9 @@ int main(int argc, char** argv) {
     const std::string robot_ip = "172.16.1.2";
 
     // Start and end joint configurations
-    std::array<double, 7> q_start = {{0.0, 0.0, 0.0, -1.57, 0.0, 1.57, -0.785}};
-    std::array<double, 7> q_end = {{-1, -0.35, -0.84, -2, -1, 2, 0.23}};
+    std::array<double, 7> q_start = {{0, 0, 0, -1.57079, 0, 1.57079,  -0.7853}};
+    std::array<double, 7> q_end = {{-1, -0.55, -1.2, -2, -2.4, 3.2, 2}};
+
 
     double motion_time = 5.0;
     if (argc == 2) {
@@ -182,15 +186,22 @@ int main(int argc, char** argv) {
       // 4. 前馈力矩: tau_ff = M * ddq + C (不包含重力，因为 libfranka 自动补偿)
       Eigen::Vector<double, 7> tau_ff_vec = tau_inertia_vec + tau_coriolis_vec;
 
-      // 5. 阻抗力矩
+      // 5. 阻抗力矩（分别计算 K 和 D 部分）
       Eigen::Map<const Eigen::Vector<double, 7>> q_actual_vec(state.q.data());
       Eigen::Map<const Eigen::Vector<double, 7>> dq_actual_vec(state.dq.data());
       Eigen::Map<const Eigen::Vector<double, 7>> k_gains_vec(k_gains.data());
       Eigen::Map<const Eigen::Vector<double, 7>> d_gains_vec(d_gains.data());
 
-      Eigen::Vector<double, 7> tau_impedance_vec = 
-          k_gains_vec.array() * (q_desired_vec - q_actual_vec).array() +
+      // 刚度力矩: tau_k = K * (q_d - q)
+      Eigen::Vector<double, 7> tau_k_vec = 
+          k_gains_vec.array() * (q_desired_vec - q_actual_vec).array();
+      
+      // 阻尼力矩: tau_d = D * (dq_d - dq)
+      Eigen::Vector<double, 7> tau_d_vec = 
           d_gains_vec.array() * (dq_desired_vec - dq_actual_vec).array();
+      
+      // 总阻抗力矩: tau_impedance = tau_k + tau_d
+      Eigen::Vector<double, 7> tau_impedance_vec = tau_k_vec + tau_d_vec;
 
       // 6. 总命令力矩: tau_cmd = tau_ff + tau_impedance
       //    = (M*ddq + C) + tau_impedance
@@ -202,6 +213,8 @@ int main(int argc, char** argv) {
       std::array<double, 7> dq_desired;
       std::array<double, 7> tau_cmd;
       std::array<double, 7> tau_impedance;
+      std::array<double, 7> tau_k;
+      std::array<double, 7> tau_d;
       std::array<double, 7> tau_inertia;
       std::array<double, 7> tau_coriolis;
       std::array<double, 7> tau_gravity;
@@ -210,6 +223,8 @@ int main(int argc, char** argv) {
       Eigen::Map<Eigen::Vector<double, 7>>(dq_desired.data()) = dq_desired_vec;
       Eigen::Map<Eigen::Vector<double, 7>>(tau_cmd.data()) = tau_cmd_vec;
       Eigen::Map<Eigen::Vector<double, 7>>(tau_impedance.data()) = tau_impedance_vec;
+      Eigen::Map<Eigen::Vector<double, 7>>(tau_k.data()) = tau_k_vec;
+      Eigen::Map<Eigen::Vector<double, 7>>(tau_d.data()) = tau_d_vec;
       Eigen::Map<Eigen::Vector<double, 7>>(tau_inertia.data()) = tau_inertia_vec;
       Eigen::Map<Eigen::Vector<double, 7>>(tau_coriolis.data()) = tau_coriolis_vec;
       Eigen::Map<Eigen::Vector<double, 7>>(tau_gravity.data()) = tau_gravity_vec;
@@ -226,6 +241,8 @@ int main(int argc, char** argv) {
         recorded_data[sample_index].tau_J = state.tau_J;           // 测量力矩
         recorded_data[sample_index].tau_cmd = tau_cmd;             // 命令力矩（发送给机器人）
         recorded_data[sample_index].tau_impedance = tau_impedance; // 阻抗力矩
+        recorded_data[sample_index].tau_k = tau_k;                 // 刚度力矩 (K * 位置误差)
+        recorded_data[sample_index].tau_d = tau_d;                 // 阻尼力矩 (D * 速度误差)
         recorded_data[sample_index].tau_inertia = tau_inertia;     // 惯性力矩
         recorded_data[sample_index].tau_coriolis = tau_coriolis;   // 科氏力矩
         recorded_data[sample_index].tau_gravity = tau_gravity;     // 重力力矩（仅记录）
@@ -272,6 +289,8 @@ int main(int argc, char** argv) {
     for (int j = 1; j <= 7; j++) csv_file << ",tau_inertia_" << j;     // 惯性力矩
     for (int j = 1; j <= 7; j++) csv_file << ",tau_coriolis_" << j;    // 科氏力矩
     for (int j = 1; j <= 7; j++) csv_file << ",tau_gravity_" << j;     // 重力力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_k_" << j;           // 刚度力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_d_" << j;           // 阻尼力矩
     csv_file << "\n";
 
     csv_file << std::fixed << std::setprecision(6);
@@ -287,6 +306,8 @@ int main(int argc, char** argv) {
       for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_inertia[i];
       for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_coriolis[i];
       for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_gravity[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_k[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_d[i];
       csv_file << "\n";
     }
 

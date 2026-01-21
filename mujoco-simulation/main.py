@@ -3,7 +3,7 @@ import mujoco.viewer
 import numpy as np
 from tqdm import tqdm
 import os
-import matplotlib.pyplot as plt
+import csv
 from src.Polynomial_traj import plan_quintic, quintic_coeffs, sample_trajectory
 
 # Load the model from the directory where this script is located
@@ -18,7 +18,7 @@ mj_model.opt.timestep = SIM_DT
 
 # 关节空间内进行五次多项式的规划
 p0 = np.array([0, 0, 0, -1.57079, 0, 1.57079,  -0.7853])   # 初始位置
-pT = np.array([-1, -0.35, -0.84, -2, -1, 2, 0.23])  # 终止位置
+pT = np.array([-1, -0.55, -1.2, -2, -2.4, 3.2, 2])  # 终止位置
 T = 5.0  # 终止时间
 dt = SIM_DT
 num = int(T / dt) + 1  # 20001
@@ -64,44 +64,39 @@ measured_positions = np.array(measured_positions)
 
 # Time axis
 time_axis = np.linspace(0, T, len(measured_torques))
-joint_names = ['Joint 1', 'Joint 2', 'Joint 3', 'Joint 4', 'Joint 5', 'Joint 6', 'Joint 7']
 
-# 第一幅图：关节力矩 (2x4布局，显示7个关节力矩)
-fig1, axes1 = plt.subplots(2, 4, figsize=(16, 8))
-fig1.suptitle('Joint Torques', fontsize=16)
+# 创建 data 文件夹（如果不存在）
+data_dir = os.path.join(script_dir, 'data')
+os.makedirs(data_dir, exist_ok=True)
 
-for i in range(7):
-    row = i // 4
-    col = i % 4
-    axes1[row, col].plot(time_axis, measured_torques[:, i], 'b-', linewidth=2)
-    axes1[row, col].set_title(f'{joint_names[i]} Torque')
-    axes1[row, col].set_xlabel('Time (s)')
-    axes1[row, col].set_ylabel('Torque (Nm)')
-    axes1[row, col].grid(True, alpha=0.3)
+# 保存关节力矩数据到 CSV
+torque_csv_path = os.path.join(data_dir, 'joint_torques.csv')
+with open(torque_csv_path, 'w', newline='') as f:
+    writer = csv.writer(f)
+    # 写入表头
+    header = ['time', 'joint1_torque', 'joint2_torque', 'joint3_torque', 
+              'joint4_torque', 'joint5_torque', 'joint6_torque', 'joint7_torque']
+    writer.writerow(header)
+    # 写入数据
+    for i in range(len(time_axis)):
+        row = [time_axis[i]] + list(measured_torques[i])
+        writer.writerow(row)
+print(f"关节力矩数据已保存到: {torque_csv_path}")
 
-# 隐藏第8个子图（因为只有7个关节）
-axes1[1, 3].set_visible(False)
-
-plt.tight_layout()
-plt.show()
-
-# 第二幅图：关节角度对比 (期望vs实际，2x4布局)
-fig2, axes2 = plt.subplots(2, 4, figsize=(16, 8))
-fig2.suptitle('Joint Angles: Desired vs Actual', fontsize=16)
-
-for i in range(7):
-    row = i // 4
-    col = i % 4
-    axes2[row, col].plot(t, pos[:, i], 'r--', linewidth=2, label='Desired')
-    axes2[row, col].plot(time_axis, measured_positions[:, i], 'b-', linewidth=2, label='Actual')
-    axes2[row, col].set_title(f'{joint_names[i]} Angle')
-    axes2[row, col].set_xlabel('Time (s)')
-    axes2[row, col].set_ylabel('Angle (rad)')
-    axes2[row, col].grid(True, alpha=0.3)
-    axes2[row, col].legend()
-
-# 隐藏第8个子图（因为只有7个关节）
-axes2[1, 3].set_visible(False)
-
-plt.tight_layout()
-plt.show()
+# 保存关节角度数据到 CSV（包含期望和实际）
+position_csv_path = os.path.join(data_dir, 'joint_positions.csv')
+with open(position_csv_path, 'w', newline='') as f:
+    writer = csv.writer(f)
+    # 写入表头
+    header = ['time', 
+              'joint1_desired', 'joint2_desired', 'joint3_desired', 'joint4_desired',
+              'joint5_desired', 'joint6_desired', 'joint7_desired',
+              'joint1_actual', 'joint2_actual', 'joint3_actual', 'joint4_actual',
+              'joint5_actual', 'joint6_actual', 'joint7_actual']
+    writer.writerow(header)
+    # 写入数据
+    for i in range(len(time_axis)):
+        idx = min(i, traj_len - 1)  # 与仿真循环保持一致
+        row = [time_axis[i]] + list(pos[idx]) + list(measured_positions[i])
+        writer.writerow(row)
+print(f"关节角度数据已保存到: {position_csv_path}")

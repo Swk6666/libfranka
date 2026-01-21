@@ -77,6 +77,9 @@ foreach(example ${EXAMPLES})
   target_link_libraries(${example} Franka::Franka examples_common Eigen3::Eigen3)
 endforeach()
 
+target_sources(move_to_mujoco_keyframe_circle_impedance PRIVATE CoordinateTransform.cpp)
+target_sources(move_to_mujoco_keyframe_full_dynamics_impedance PRIVATE CoordinateTransform.cpp)
+
 target_link_libraries(joint_impedance_control Threads::Threads)
 target_link_libraries(motion_with_control Poco::Foundation)
 

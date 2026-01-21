@@ -2,20 +2,20 @@
 // Use of this source code is governed by the Apache-2.0 license, see LICENSE
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <iomanip>
 #include <iostream>
 #include <string>
 #include <vector>
 #include <fstream>
-#include <sys/stat.h>
-#include <sys/types.h>
 
 #include <franka/duration.h>
 #include <franka/exception.h>
 #include <franka/model.h>
 #include <franka/robot.h>
 #include <franka/circle_trajectory.h>
+#include <franka/CoordinateTransform.h>
 
 #include "examples_common.h"
 
@@ -148,6 +148,7 @@ int main(int argc, char** argv) {
     const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0}};
   
     // Variables for control loop
+    CoordinateTransform transformer;
     std::array<double, 16> initial_pose;
     std::array<double, 16> last_pose;
 
@@ -156,20 +157,38 @@ int main(int argc, char** argv) {
 
     // Data recording structures
     struct TrajectoryData {
-      double timestamp;
+      double time;
       double desired_x, desired_y, desired_z;
       double actual_x, actual_y, actual_z;
       double commanded_x, commanded_y, commanded_z;
-      double q_desired[7];  // 期望关节角度
-      double q_actual[7];   // 实际关节角度
-      double tau[7];        // 实际关节力矩
+      double actual_q[4];    // 实际姿态四元数 [w, x, y, z]
+      double q_desired[7];    // 期望关节角度
+      double q_actual[7];     // 实际关节角度
+      double tau_J[7];        // 测量关节力矩
+      double tau_cmd[7];      // 命令力矩 (发送给机器人)
+      double tau_impedance[7];// 阻抗力矩 (tau_k + tau_d)
+      double tau_inertia[7];  // 惯性力矩 (M*ddq)
+      double tau_coriolis[7]; // 科氏力矩
+      double tau_gravity[7];  // 重力力矩 (仅记录，不发送)
+      double tau_k[7];        // 刚度力矩 (K * 位置误差)
+      double tau_d[7];        // 阻尼力矩 (D * 速度误差)
     };
     std::vector<TrajectoryData> recorded_data;
     recorded_data.reserve(static_cast<size_t>((line_time + circle_time) * 1000) + 1000);
 
+    // 共享变量，用于在回调之间传递力矩分量
+    std::array<double, 7> last_tau_cmd = {0};
+    std::array<double, 7> last_tau_impedance = {0};
+    std::array<double, 7> last_tau_inertia = {0};
+    std::array<double, 7> last_tau_coriolis = {0};
+    std::array<double, 7> last_tau_gravity = {0};
+    std::array<double, 7> last_tau_k = {0};
+    std::array<double, 7> last_tau_d = {0};
+
 
     auto cartesian_pose_callback =
-        [&initial_pose, &last_pose, &initialized, &time, radius, line_time, circle_time, total_time, &recorded_data](
+        [&transformer, &initial_pose, &last_pose, &initialized, &time, radius, line_time, circle_time, total_time, &recorded_data,
+         &last_tau_cmd, &last_tau_impedance, &last_tau_inertia, &last_tau_coriolis, &last_tau_gravity, &last_tau_k, &last_tau_d](
             const franka::RobotState& robot_state,
             franka::Duration period) -> franka::CartesianPose 
         {
@@ -194,7 +213,7 @@ int main(int argc, char** argv) {
 
           // Record trajectory data
           TrajectoryData data;
-          data.timestamp = time;
+          data.time = time;
           // Desired position (from trajectory generation)
           data.desired_x = initial_pose[12] + point.position[0];
           data.desired_y = initial_pose[13] + point.position[1];
@@ -207,11 +226,38 @@ int main(int argc, char** argv) {
           data.commanded_x = robot_state.O_T_EE_c[12];
           data.commanded_y = robot_state.O_T_EE_c[13];
           data.commanded_z = robot_state.O_T_EE_c[14];
-          // Joint angles
+          auto pose_to_quat = [&transformer](const std::array<double, 16>& pose,
+                                             CoordinateTransform::Quaternion& quat) {
+            CoordinateTransform::RotationMatrix rot;
+            // libfranka uses column-major 4x4 transforms.
+            rot[0][0] = pose[0];
+            rot[0][1] = pose[4];
+            rot[0][2] = pose[8];
+            rot[1][0] = pose[1];
+            rot[1][1] = pose[5];
+            rot[1][2] = pose[9];
+            rot[2][0] = pose[2];
+            rot[2][1] = pose[6];
+            rot[2][2] = pose[10];
+            transformer.rot2quat(rot, quat);
+          };
+          CoordinateTransform::Quaternion quat;
+          pose_to_quat(robot_state.O_T_EE, quat);
+          for (size_t i = 0; i < 4; ++i) {
+            data.actual_q[i] = quat[i];
+          }
+          // Joint angles and torques
           for (size_t i = 0; i < 7; i++) {
             data.q_desired[i] = robot_state.q_d[i];
             data.q_actual[i] = robot_state.q[i];
-            data.tau[i] = robot_state.tau_J[i];
+            data.tau_J[i] = robot_state.tau_J[i];
+            data.tau_cmd[i] = last_tau_cmd[i];
+            data.tau_impedance[i] = last_tau_impedance[i];
+            data.tau_inertia[i] = last_tau_inertia[i];
+            data.tau_coriolis[i] = last_tau_coriolis[i];
+            data.tau_gravity[i] = last_tau_gravity[i];
+            data.tau_k[i] = last_tau_k[i];
+            data.tau_d[i] = last_tau_d[i];
           }
           recorded_data.push_back(data);
 
@@ -223,32 +269,47 @@ int main(int argc, char** argv) {
           return new_pose;
         };
 
-    auto impedance_control_callback = [&model, k_gains, d_gains](
+    auto impedance_control_callback = [&model, k_gains, d_gains, 
+         &last_tau_cmd, &last_tau_impedance, &last_tau_inertia, &last_tau_coriolis, &last_tau_gravity, &last_tau_k, &last_tau_d](
                                           const franka::RobotState& state,
                                           franka::Duration /*period*/) -> franka::Torques 
     {
-      // Read current coriolis terms from model.
+      // Read dynamics model parameters
       std::array<double, 7> coriolis = model.coriolis(state);
-      
-      // Get mass matrix and extract diagonal elements (inertia)
+      std::array<double, 7> gravity = model.gravity(state);
       std::array<double, 49> mass_matrix = model.mass(state);
 
       // Compute torque command from joint impedance control law with acceleration feedforward
       // Note: The answer to our Cartesian pose inverse kinematics is always in state.q_d with one
       // time step delay.
       // 不加重力项，因为 libfranka 会自动补偿
-      std::array<double, 7> tau_d_calculated;
+      std::array<double, 7> tau_cmd;
       for (size_t i = 0; i < 7; i++) {
         double inertia = mass_matrix[i * 7 + i];  // Extract diagonal element
         
-        tau_d_calculated[i] = k_gains[i] * (state.q_d[i] - state.q[i]) -
-                              d_gains[i] * (state.dq[i] - state.dq_d[i]) +  // Velocity error damping
-                              coriolis[i] +
-                              inertia * state.ddq_d[i];  // Acceleration feedforward
+        // 分别计算各个力矩分量
+        double tau_k = k_gains[i] * (state.q_d[i] - state.q[i]);           // 刚度力矩
+        double tau_d = -d_gains[i] * (state.dq[i] - state.dq_d[i]);        // 阻尼力矩
+        double tau_impedance = tau_k + tau_d;                               // 阻抗力矩
+        double tau_inertia = inertia * state.ddq_d[i];                     // 惯性力矩
+        double tau_coriolis = coriolis[i];                                  // 科氏力矩
+        double tau_gravity = gravity[i];                                    // 重力力矩 (仅记录)
+        
+        // 存储到共享变量中用于记录
+        last_tau_k[i] = tau_k;
+        last_tau_d[i] = tau_d;
+        last_tau_impedance[i] = tau_impedance;
+        last_tau_inertia[i] = tau_inertia;
+        last_tau_coriolis[i] = tau_coriolis;
+        last_tau_gravity[i] = tau_gravity;
+        
+        // 命令力矩 = 阻抗 + 惯性 + 科氏 (不包含重力，libfranka自动补偿)
+        tau_cmd[i] = tau_impedance + tau_inertia + tau_coriolis;
+        last_tau_cmd[i] = tau_cmd[i];
       }
 
       // 直接返回计算的力矩，不使用 limitRate
-      return tau_d_calculated;
+      return tau_cmd;
     };
 
     // Execute joint impedance control following the circle trajectory via internal IK.
@@ -264,81 +325,83 @@ int main(int argc, char** argv) {
     std::string source_dir = source_path.substr(0, source_path.find_last_of("/\\"));  // examples 目录
     std::string parent_dir = source_dir.substr(0, source_dir.find_last_of("/\\"));    // libfranka 目录
     std::string data_dir = parent_dir + "/data/circle_trajectory_impedance";
-    std::string filename = data_dir + "/circle_trajectory_data_impedance.csv";
-    
-    // 创建目录（如果不存在）
-    mkdir((parent_dir + "/data").c_str(), 0755);
-    mkdir(data_dir.c_str(), 0755);
-    
-    std::ofstream data_file(filename);
-    
-    if (data_file.is_open()) {
-      // Write CSV header
-      data_file << "timestamp,desired_x,desired_y,desired_z,actual_x,actual_y,actual_z,commanded_x,commanded_y,commanded_z,";
-      data_file << "error_x,error_y,error_z,error_norm,";
-      data_file << "q_d0,q_d1,q_d2,q_d3,q_d4,q_d5,q_d6,";
-      data_file << "q0,q1,q2,q3,q4,q5,q6,";
-      data_file << "tau0,tau1,tau2,tau3,tau4,tau5,tau6" << std::endl;
-      
-      // Write data rows
-      for (const auto& data : recorded_data) {
-        double error_x = data.desired_x - data.actual_x;
-        double error_y = data.desired_y - data.actual_y;
-        double error_z = data.desired_z - data.actual_z;
-        double error_norm = std::sqrt(error_x * error_x + error_y * error_y + error_z * error_z);
-        
-        data_file << std::fixed << std::setprecision(6);
-        data_file << data.timestamp << ","
-                  << data.desired_x << "," << data.desired_y << "," << data.desired_z << ","
-                  << data.actual_x << "," << data.actual_y << "," << data.actual_z << ","
-                  << data.commanded_x << "," << data.commanded_y << "," << data.commanded_z << ","
-                  << error_x << "," << error_y << "," << error_z << "," << error_norm << ",";
-        
-        // Write joint desired angles
-        for (size_t i = 0; i < 7; i++) {
-          data_file << data.q_desired[i];
-          if (i < 6) data_file << ",";
-        }
-        data_file << ",";
-        
-        // Write joint actual angles
-        for (size_t i = 0; i < 7; i++) {
-          data_file << data.q_actual[i];
-          if (i < 6) data_file << ",";
-        }
-        data_file << ",";
-        
-        // Write joint torques
-        for (size_t i = 0; i < 7; i++) {
-          data_file << data.tau[i];
-          if (i < 6) data_file << ",";
-        }
-        data_file << std::endl;
+    std::string csv_filename = data_dir + "/circle_trajectory_data_impedance.csv";
+
+    std::string mkdir_cmd = "mkdir -p " + data_dir;
+    std::system(mkdir_cmd.c_str());
+
+    std::cout << "Saving data to: " << csv_filename << std::endl;
+
+    std::ofstream csv_file(csv_filename);
+    if (!csv_file.is_open()) {
+      std::cerr << "Error: Could not open file " << csv_filename << " for writing." << std::endl;
+      return -1;
+    }
+
+    csv_file << "time";
+    csv_file << ",desired_x,desired_y,desired_z,actual_x,actual_y,actual_z,commanded_x,commanded_y,commanded_z";
+    csv_file << ",actual_qw,actual_qx,actual_qy,actual_qz";
+    csv_file << ",error_x,error_y,error_z,error_norm";
+    for (int j = 1; j <= 7; j++) csv_file << ",q_desired_" << j;
+    for (int j = 1; j <= 7; j++) csv_file << ",q_actual_" << j;
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_J_" << j;           // 测量力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_cmd_" << j;         // 命令力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_impedance_" << j;   // 阻抗力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_inertia_" << j;     // 惯性力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_coriolis_" << j;    // 科氏力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_gravity_" << j;     // 重力力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_k_" << j;           // 刚度力矩
+    for (int j = 1; j <= 7; j++) csv_file << ",tau_d_" << j;           // 阻尼力矩
+    csv_file << "\n";
+
+    csv_file << std::fixed << std::setprecision(6);
+    for (const auto& record : recorded_data) {
+      double error_x = record.desired_x - record.actual_x;
+      double error_y = record.desired_y - record.actual_y;
+      double error_z = record.desired_z - record.actual_z;
+      double error_norm = std::sqrt(error_x * error_x + error_y * error_y + error_z * error_z);
+
+      csv_file << record.time
+               << "," << record.desired_x << "," << record.desired_y << "," << record.desired_z
+               << "," << record.actual_x << "," << record.actual_y << "," << record.actual_z
+               << "," << record.commanded_x << "," << record.commanded_y << "," << record.commanded_z
+               << "," << record.actual_q[0] << "," << record.actual_q[1] << "," << record.actual_q[2]
+               << "," << record.actual_q[3]
+               << "," << error_x << "," << error_y << "," << error_z << "," << error_norm;
+
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.q_desired[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.q_actual[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_J[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_cmd[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_impedance[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_inertia[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_coriolis[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_gravity[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_k[i];
+      for (size_t i = 0; i < 7; i++) csv_file << "," << record.tau_d[i];
+      csv_file << "\n";
+    }
+
+    csv_file.close();
+    std::cout << "Data saved to " << csv_filename << std::endl;
+    std::cout << "Total data points recorded: " << recorded_data.size() << std::endl;
+
+    // Print statistics
+    if (!recorded_data.empty()) {
+      double max_error = 0.0;
+      double sum_error = 0.0;
+      for (const auto& record : recorded_data) {
+        double error_x = record.desired_x - record.actual_x;
+        double error_y = record.desired_y - record.actual_y;
+        double error_z = record.desired_z - record.actual_z;
+        double error = std::sqrt(error_x * error_x + error_y * error_y + error_z * error_z);
+        max_error = std::max(max_error, error);
+        sum_error += error;
       }
-      
-      data_file.close();
-      std::cout << "\nTrajectory data saved to: " << filename << std::endl;
-      std::cout << "Total data points recorded: " << recorded_data.size() << std::endl;
-      
-      // Print statistics
-      if (!recorded_data.empty()) {
-        double max_error = 0.0;
-        double sum_error = 0.0;
-        for (const auto& data : recorded_data) {
-          double error_x = data.desired_x - data.actual_x;
-          double error_y = data.desired_y - data.actual_y;
-          double error_z = data.desired_z - data.actual_z;
-          double error = std::sqrt(error_x * error_x + error_y * error_y + error_z * error_z);
-          max_error = std::max(max_error, error);
-          sum_error += error;
-        }
-        double avg_error = sum_error / recorded_data.size();
-        std::cout << "\n=== Tracking Performance ===" << std::endl;
-        std::cout << "Average tracking error: " << (avg_error * 1000.0) << " mm" << std::endl;
-        std::cout << "Maximum tracking error: " << (max_error * 1000.0) << " mm" << std::endl;
-      }
-    } else {
-      std::cerr << "Warning: Could not open file for writing: " << filename << std::endl;
+      double avg_error = sum_error / recorded_data.size();
+      std::cout << "\n=== Tracking Performance ===" << std::endl;
+      std::cout << "Average tracking error: " << (avg_error * 1000.0) << " mm" << std::endl;
+      std::cout << "Maximum tracking error: " << (max_error * 1000.0) << " mm" << std::endl;
     }
     
   } 

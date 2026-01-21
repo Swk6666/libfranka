@@ -87,8 +87,16 @@ def main():
         return
     
     data = load_csv(csv_path)
+    columns = get_columns(data)
+    if "time" in columns:
+        time_key = "time"
+    elif "timestamp" in columns:
+        time_key = "timestamp"
+    else:
+        raise KeyError("Missing time column in CSV (expected 'time' or 'timestamp').")
+
     required = [
-        "timestamp",
+        time_key,
         "desired_x",
         "desired_y",
         "desired_z",
@@ -98,9 +106,9 @@ def main():
     ]
     require_columns(data, required)
 
-    num_points = len(get_series(data, "timestamp"))
+    num_points = len(get_series(data, time_key))
     print(f"Loaded {num_points} data points")
-    time_raw = get_series(data, "timestamp")
+    time_raw = get_series(data, time_key)
     time = time_raw - time_raw[0]
     print(f"Time range: {time.min():.2f}s to {time.max():.2f}s")
     
