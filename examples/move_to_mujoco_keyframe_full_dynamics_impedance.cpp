@@ -14,6 +14,7 @@
 
 #include <franka/duration.h>
 #include <franka/exception.h>
+#include <franka/lowpass_filter.h>
 #include <franka/model.h>
 #include <franka/quintic_polynomial.h>
 #include <franka/rate_limiting.h>
@@ -137,6 +138,9 @@ int main(int argc, char** argv) {
     const size_t max_samples = static_cast<size_t>(motion_time * 1000) + 100;
     std::vector<DataRecord> recorded_data(max_samples);
     size_t sample_index = 0;
+    const double dq_cutoff_frequency = 50.0;
+    std::array<double, 7> dq_filtered{};
+    bool dq_filter_initialized = false;
 
     std::cout << "Starting quintic polynomial motion with full dynamics impedance..." << std::endl;
     std::cout << "Recording data during motion..." << std::endl;
@@ -145,6 +149,16 @@ int main(int argc, char** argv) {
     robot.control([&](const franka::RobotState& state,
       franka::Duration period) -> franka::Torques {
       double dt = period.toSec();
+      if (!dq_filter_initialized) {
+        dq_filtered = state.dq;
+        dq_filter_initialized = true;
+      } else {
+        for (size_t i = 0; i < 7; i++) {
+          dq_filtered[i] =
+              franka::lowpassFilter(dt, state.dq[i], dq_filtered[i], dq_cutoff_frequency);
+        }
+      }
+
       double s = quintic.step(dt);
       double time = quintic.getTime();
       double tau = time / motion_time;
@@ -188,7 +202,7 @@ int main(int argc, char** argv) {
 
       // 5. 阻抗力矩（分别计算 K 和 D 部分）
       Eigen::Map<const Eigen::Vector<double, 7>> q_actual_vec(state.q.data());
-      Eigen::Map<const Eigen::Vector<double, 7>> dq_actual_vec(state.dq.data());
+      Eigen::Map<const Eigen::Vector<double, 7>> dq_actual_vec(dq_filtered.data());
       Eigen::Map<const Eigen::Vector<double, 7>> k_gains_vec(k_gains.data());
       Eigen::Map<const Eigen::Vector<double, 7>> d_gains_vec(d_gains.data());
 
@@ -237,7 +251,7 @@ int main(int argc, char** argv) {
         recorded_data[sample_index].q_desired = q_desired;
         recorded_data[sample_index].q_actual = state.q;
         recorded_data[sample_index].dq_desired = dq_desired;
-        recorded_data[sample_index].dq_actual = state.dq;
+        recorded_data[sample_index].dq_actual = dq_filtered;
         recorded_data[sample_index].tau_J = state.tau_J;           // 测量力矩
         recorded_data[sample_index].tau_cmd = tau_cmd;             // 命令力矩（发送给机器人）
         recorded_data[sample_index].tau_impedance = tau_impedance; // 阻抗力矩

@@ -3,21 +3,41 @@
 Compare desired and actual joint angles for all 7 joints.
 """
 
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
 
+
+def resolve_csv_path(script_dir, input_path):
+    if input_path:
+        return os.path.abspath(input_path)
+    candidates = [
+        os.path.join(script_dir, "..", "circle_trajectory_impedance", "circle_trajectory_data_impedance.csv"),
+        os.path.join(script_dir, "trajectory_data.csv"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return os.path.abspath(path)
+    return os.path.abspath(candidates[0])
+
 def main():
-    # Load data from same directory
+    parser = argparse.ArgumentParser(description="Compare desired vs actual joint angles.")
+    parser.add_argument("--input", default=None, help="Path to trajectory CSV")
+    args = parser.parse_args()
+
+    # Load data
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(script_dir, 'trajectory_data.csv')
+    csv_path = resolve_csv_path(script_dir, args.input)
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
     
     print(f"Loading data from: {csv_path}")
     df = pd.read_csv(csv_path)
     print(f"Loaded {len(df)} data points")
     
-    time = df['time'].values
+    time = df["time"].values
     
     # Create figure with 7 subplots
     fig, axes = plt.subplots(7, 1, figsize=(12, 14), sharex=True)
@@ -27,8 +47,8 @@ def main():
     
     for i in range(7):
         ax = axes[i]
-        q_desired = df[f'q_desired_{i+1}'].values
-        q_actual = df[f'q_actual_{i+1}'].values
+        q_desired = df[f"q_desired_{i+1}"].values
+        q_actual = df[f"q_actual_{i+1}"].values
         
         ax.plot(time, q_desired, color=colors['desired'], linewidth=1.5, 
                 label='Desired', alpha=0.9)
@@ -50,7 +70,7 @@ def main():
     plt.tight_layout()
     
     # Save figure
-    output_path = os.path.join(script_dir, 'compare_qpos.png')
+    output_path = os.path.join(script_dir, "compare_qpos.png")
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Figure saved to: {output_path}")
     

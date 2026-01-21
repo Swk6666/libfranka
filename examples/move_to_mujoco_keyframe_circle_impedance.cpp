@@ -12,6 +12,7 @@
 
 #include <franka/duration.h>
 #include <franka/exception.h>
+#include <franka/lowpass_filter.h>
 #include <franka/model.h>
 #include <franka/robot.h>
 #include <franka/circle_trajectory.h>
@@ -184,6 +185,9 @@ int main(int argc, char** argv) {
     std::array<double, 7> last_tau_gravity = {0};
     std::array<double, 7> last_tau_k = {0};
     std::array<double, 7> last_tau_d = {0};
+    const double dq_cutoff_frequency = 50.0;
+    std::array<double, 7> dq_filtered{};
+    bool dq_filter_initialized = false;
 
 
     auto cartesian_pose_callback =
@@ -270,10 +274,22 @@ int main(int argc, char** argv) {
         };
 
     auto impedance_control_callback = [&model, k_gains, d_gains, 
-         &last_tau_cmd, &last_tau_impedance, &last_tau_inertia, &last_tau_coriolis, &last_tau_gravity, &last_tau_k, &last_tau_d](
+         &last_tau_cmd, &last_tau_impedance, &last_tau_inertia, &last_tau_coriolis, &last_tau_gravity, &last_tau_k, &last_tau_d,
+         &dq_filtered, &dq_filter_initialized, dq_cutoff_frequency](
                                           const franka::RobotState& state,
-                                          franka::Duration /*period*/) -> franka::Torques 
+                                          franka::Duration period) -> franka::Torques 
     {
+      double dt = period.toSec();
+      if (!dq_filter_initialized) {
+        dq_filtered = state.dq;
+        dq_filter_initialized = true;
+      } else {
+        for (size_t i = 0; i < 7; i++) {
+          dq_filtered[i] =
+              franka::lowpassFilter(dt, state.dq[i], dq_filtered[i], dq_cutoff_frequency);
+        }
+      }
+
       // Read dynamics model parameters
       std::array<double, 7> coriolis = model.coriolis(state);
       std::array<double, 7> gravity = model.gravity(state);
@@ -289,7 +305,7 @@ int main(int argc, char** argv) {
         
         // 分别计算各个力矩分量
         double tau_k = k_gains[i] * (state.q_d[i] - state.q[i]);           // 刚度力矩
-        double tau_d = -d_gains[i] * (state.dq[i] - state.dq_d[i]);        // 阻尼力矩
+        double tau_d = -d_gains[i] * (dq_filtered[i] - state.dq_d[i]);     // 阻尼力矩
         double tau_impedance = tau_k + tau_d;                               // 阻抗力矩
         double tau_inertia = inertia * state.ddq_d[i];                     // 惯性力矩
         double tau_coriolis = coriolis[i];                                  // 科氏力矩
