@@ -129,12 +129,12 @@ int main(int argc, char** argv) {
     franka::Model model = robot.loadModel();
 
     const double k_gain_scale = 1.0;
-    const double d_gain_scale = 1.0;
+    const double d_gain_scale = 0.1;
     Eigen::Array<double, 7, 1> k_gains;
     k_gains << 600.0, 600.0, 600.0, 600.0, 50.0, 150.0, 50.0;
     k_gains *= k_gain_scale;
     Eigen::Array<double, 7, 1> d_gains;
-    d_gains << 50.0, 50.0, 50.0, 50.0, 20.0, 25.0, 15.0;
+    d_gains << 50.0, 200.0, 50.0, 50.0, 20.0, 25.0, 15.0;
     d_gains *= d_gain_scale;
 
     franka::QuinticPolynomial quintic(motion_time);
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
     const size_t max_samples = static_cast<size_t>(motion_time * 1000) + 100;
     std::vector<DataRecord> recorded_data(max_samples);
     size_t sample_index = 0;
-    constexpr size_t kDqFilterSize = 5;
+    constexpr size_t kDqFilterSize = 1;
     std::array<std::array<double, 7>, kDqFilterSize> dq_buffer{};
     size_t dq_filter_index = 0;
     size_t dq_filter_count = 0;

@@ -146,8 +146,8 @@ int main(int argc, char** argv) {
     franka::Model model = robot.loadModel();
 
     // Set gains for the joint impedance control.
-    const double k_gain_scale = 1.0;
-    const double d_gain_scale = 1.0;
+    const double k_gain_scale = 1.2;
+    const double d_gain_scale = 0.5;
     Eigen::Array<double, 7, 1> k_gains;
     k_gains << 700.0, 700.0, 700.0, 700.0, 750.0, 350.0, 70.0;
     k_gains *= k_gain_scale;
